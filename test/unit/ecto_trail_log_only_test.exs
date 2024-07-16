@@ -20,7 +20,7 @@ defmodule EctoTrailLogOnlyTest do
 
       {_n, structs_list} = TestRepo.insert_all(Resource, ready_changes, returning: true)
 
-      result = TestRepo.log_bulk(structs_list, changes_list, "cowboy")
+      result = TestRepo.log_bulk(structs_list, changes_list, "cowboy", :insert)
 
       ids = Enum.map(structs_list, fn inserted_struct -> inserted_struct.id end)
 
