@@ -62,6 +62,15 @@ defmodule EctoTrailLogOnlyTest do
         "cowboy",
         :delete
       )
+
+      Enum.each(Enum.zip([ids, changeset_like_maps]), fn {an_id, a_change} ->
+        assert %{
+                 changeset: a_change,
+                 actor_id: "cowboy",
+                 change_type: :delete
+               } =
+                 TestRepo.get_by(Changelog, %{resource_id: an_id |> to_string(), change_type: :delete})
+      end)
     end
   end
 end
