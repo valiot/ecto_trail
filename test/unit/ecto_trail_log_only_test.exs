@@ -20,6 +20,7 @@ defmodule EctoTrailLogOnlyTest do
 
       {_n, structs_list} = TestRepo.insert_all(Resource, ready_changes, returning: true)
 
+      # logging inserted
       result = TestRepo.log_bulk(structs_list, changes_list, "cowboy", :insert)
 
       ids = Enum.map(structs_list, fn inserted_struct -> inserted_struct.id end)
@@ -33,6 +34,34 @@ defmodule EctoTrailLogOnlyTest do
                  change_type: :insert
                } = TestRepo.get_by(Changelog, %{resource_id: an_id |> to_string()})
       end)
+
+      # logging deleted
+      {_n, deleted_objects_list} = TestRepo.delete_all(from(s in Resource, where: s.id in ^ids, select: s))
+
+      associations = (fn s -> s.__struct__.__schema__(:associations) end).(struct(Resource))
+
+      changeset_like_maps =
+        Enum.map(
+          deleted_objects_list,
+          fn deleted_object ->
+            Map.from_struct(deleted_object)
+            |> Map.delete(:__meta__)
+            |> Enum.reduce(%{}, fn {key, value}, acc ->
+              if key in associations do
+                Map.put(acc, key, nil)
+              else
+                Map.put(acc, key, value)
+              end
+            end)
+          end
+        )
+
+      TestRepo.log_bulk(
+        deleted_objects_list,
+        changeset_like_maps,
+        "cowboy",
+        :delete
+      )
     end
   end
 end
