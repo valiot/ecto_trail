@@ -49,8 +49,12 @@ defmodule EctoTrail do
   alias Ecto.Multi
   require Logger
 
+  @type action_type :: :insert | :update | :upsert | :delete
+
   defmacro __using__(_) do
     quote do
+      @type action_type :: :insert | :update | :upsert | :delete
+
       @doc """
       Store changes in a `change_log` table.
       """
@@ -58,7 +62,7 @@ defmodule EctoTrail do
               struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
               changes :: Map.t(),
               actor_id :: String.T,
-              action_type :: :insert | :update | :upsert | :delete
+              action_type :: action_type()
             ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
       def log(struct_or_changeset, changes, actor_id, action_type),
         do: EctoTrail.log(__MODULE__, struct_or_changeset, changes, actor_id, action_type)
@@ -70,7 +74,7 @@ defmodule EctoTrail do
               structs :: list(Ecto.Schema.t()),
               changes :: list(Map.t()),
               actor_id :: String.T,
-              action_type :: :insert | :update | :upsert | :delete
+              action_type :: action_type()
             ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
       def log_bulk(structs, changes, actor_id, action_type),
         do: EctoTrail.log_bulk(__MODULE__, structs, changes, actor_id, action_type)
@@ -141,7 +145,7 @@ defmodule EctoTrail do
           struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
           changes :: Map.t(),
           actor_id :: String.T,
-          action_type :: :insert | :update | :upsert | :delete
+          action_type :: action_type()
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def log(repo, struct_or_changeset, changes, actor_id, action_type) do
     Multi.new()
@@ -157,7 +161,7 @@ defmodule EctoTrail do
           structs :: list(Ecto.Schema.t()),
           changes :: list(Map.t()),
           actor_id :: String.T,
-          action_type :: :insert | :update | :upsert | :delete
+          action_type :: action_type()
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def log_bulk(repo, structs, changes, actor_id, action_type) do
     Enum.zip(structs, changes)
