@@ -1,8 +1,6 @@
 defmodule EctoTrailLogOnlyTest do
   use EctoTrail.DataCase
   alias EctoTrail.Changelog
-  alias Ecto.Changeset
-  alias Ecto.Multi
   doctest EctoTrail
 
   describe "log_bulk" do
@@ -27,9 +25,9 @@ defmodule EctoTrailLogOnlyTest do
 
       assert :ok = result
 
-      Enum.each(Enum.zip([ids, changes_list]), fn {an_id, a_change} ->
+      Enum.each(Enum.zip([ids, changes_list]), fn {an_id, _a_change} ->
         assert %{
-                 changeset: a_change,
+                 changeset: _a_change,
                  actor_id: "cowboy",
                  change_type: :insert
                } = TestRepo.get_by(Changelog, %{resource_id: an_id |> to_string()})
@@ -63,9 +61,9 @@ defmodule EctoTrailLogOnlyTest do
         :delete
       )
 
-      Enum.each(Enum.zip([ids, changeset_like_maps]), fn {an_id, a_change} ->
+      Enum.each(Enum.zip([ids, changeset_like_maps]), fn {an_id, _a_change} ->
         assert %{
-                 changeset: a_change,
+                 changeset: _a_change,
                  actor_id: "cowboy",
                  change_type: :delete
                } =
