@@ -370,7 +370,12 @@ defmodule EctoTrail do
 
   defp redact_fields(changeset, redacted_fields) do
     Enum.reduce(redacted_fields, changeset, fn field, acc ->
-      Map.update(acc, field, nil, fn _ -> "[REDACTED]" end)
+      # Handle both string and atom keys
+      string_field = to_string(field)
+
+      acc
+      |> Map.update(field, nil, fn _ -> "[REDACTED]" end)
+      |> Map.update(string_field, nil, fn _ -> "[REDACTED]" end)
     end)
   end
 
