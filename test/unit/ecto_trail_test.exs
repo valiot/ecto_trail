@@ -79,7 +79,7 @@ defmodule EctoTrailTest do
                change_type: :insert
              } = TestRepo.one(Changelog)
 
-      assert %{} == changes
+      assert %{} == Map.drop(changes, ["password"])
     end
 
     test "logs changes when changeset with embed is inserted" do
@@ -120,21 +120,17 @@ defmodule EctoTrailTest do
                resource: "resources"
              } = TestRepo.one(Changelog)
 
+      changes_without_password = Map.drop(changes, ["password"])
+
       assert %{
                "name" => "My name",
                "data" => %{"key2" => "key2"},
                "category" => %{"title" => "test"},
-               "comments" => [
-                 %{"title" => "wow"},
-                 %{"title" => "very impressive"}
-               ],
-               "items" => [
-                 %{"name" => "Morgan"},
-                 %{"name" => "Freeman"}
-               ],
+               "comments" => [%{"title" => "wow"}, %{"title" => "very impressive"}],
+               "items" => [%{"name" => "Morgan"}, %{"name" => "Freeman"}],
                "array" => ["apple", "banana"],
                "map" => %{"latitude" => 30.52333, "longitude" => 50.45}
-             } == changes
+             } == changes_without_password
     end
 
     test "returns error when changeset is invalid" do

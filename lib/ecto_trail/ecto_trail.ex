@@ -402,14 +402,12 @@ defmodule EctoTrail do
     |> Map.from_struct()
     |> Map.drop([:__meta__])
     |> map_custom_ecto_types()
-    |> filter_nil_password()
   end
 
   # Handle regular map case
   defp get_changes(changes) when is_map(changes) do
     changes
     |> map_custom_ecto_types()
-    |> filter_nil_password()
   end
 
   # Handle list case
@@ -420,13 +418,6 @@ defmodule EctoTrail do
   # Handle other values (string, etc.)
   defp get_changes(value) do
     if not_loaded?(value), do: nil, else: value
-  end
-
-  defp filter_nil_password(changes) do
-    case Map.get(changes, "password") do
-      nil -> Map.delete(changes, "password")
-      _ -> changes
-    end
   end
 
   defp get_embed_changes(changeset, []), do: changeset
