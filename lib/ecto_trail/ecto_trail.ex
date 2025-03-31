@@ -373,9 +373,14 @@ defmodule EctoTrail do
       # Handle both string and atom keys
       string_field = to_string(field)
 
-      acc
-      |> Map.update(field, nil, fn _ -> "[REDACTED]" end)
-      |> Map.update(string_field, nil, fn _ -> "[REDACTED]" end)
+      # Only redact if the field exists in the changeset
+      if Map.has_key?(acc, field) or Map.has_key?(acc, string_field) do
+        acc
+        |> Map.put(field, "[REDACTED]")
+        |> Map.put(string_field, "[REDACTED]")
+      else
+        acc
+      end
     end)
   end
 

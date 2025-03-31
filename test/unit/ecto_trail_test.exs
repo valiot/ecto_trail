@@ -64,8 +64,7 @@ defmodule EctoTrailTest do
       password_value = Map.get(changeset, "password") || Map.get(changeset, :password)
 
       assert name_value == "My password Redacted"
-      # Either the string key or atom key should be redacted
-      assert password_value == "[REDACTED]" or password_value == nil
+      assert password_value == "[REDACTED]"
     end
 
     test "logs changes when changeset is empty" do
