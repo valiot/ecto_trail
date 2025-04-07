@@ -4,7 +4,8 @@ defmodule EctoTrail.Changelog do
   """
   use Ecto.Schema
 
-  schema Application.fetch_env!(:ecto_trail, :table_name) do
+  @table_name Application.compile_env(:ecto_trail, :table_name, "audit_log")
+  schema @table_name do
     field(:actor_id, :string)
     field(:resource, :string)
     field(:resource_id, :string)
