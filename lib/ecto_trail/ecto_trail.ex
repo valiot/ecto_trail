@@ -152,10 +152,10 @@ defmodule EctoTrail do
           actor_id :: String.T,
           action_type :: action_type()
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
-  def log(repo, struct_or_changeset, changes, actor_id, action_type) do
+  def log(repo, struct_or_changeset, _changes, actor_id, action_type) do
     Multi.new()
     |> Multi.run(:operation, fn _, _ -> {:ok, struct_or_changeset} end)
-    |> run_logging_transaction_alone(repo, struct_or_changeset, changes, actor_id, action_type)
+    |> run_logging_transaction(repo, struct_or_changeset, actor_id, action_type)
   end
 
   @doc """
@@ -170,13 +170,39 @@ defmodule EctoTrail do
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def log_bulk(repo, structs, changes, actor_id, action_type) do
     actor_id_str = to_actor_id_string(actor_id)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    Enum.zip(structs, changes)
-    |> Enum.each(fn {struct, change} ->
-      Multi.new()
-      |> Multi.run(:operation, fn _, _ -> {:ok, struct} end)
-      |> run_logging_transaction_alone(repo, struct, change, actor_id_str, action_type)
-    end)
+    changelog_entries =
+      Enum.zip(structs, changes)
+      |> Enum.map(fn {struct, change} ->
+        resource = struct.__struct__.__schema__(:source)
+        resource_id_str = to_string(struct.id)
+
+        %{
+          actor_id: actor_id_str,
+          resource: resource,
+          resource_id: resource_id_str,
+          changeset: change,
+          change_type: action_type,
+          inserted_at: now
+        }
+      end)
+
+    case repo.insert_all(Changelog, changelog_entries) do
+      {count, _} when count > 0 ->
+        :ok
+
+      _ ->
+        {:error, "Failed to insert changelog entries"}
+    end
+  rescue
+    error ->
+      Logger.error(
+        "Failed to store bulk changes in audit log: #{inspect(structs)} " <>
+          "by actor #{inspect(actor_id)}. Reason: #{inspect(error)}"
+      )
+
+      {:error, error}
   end
 
   @doc """
@@ -258,53 +284,8 @@ defmodule EctoTrail do
     |> build_result()
   end
 
-  defp run_logging_transaction_alone(multi, repo, struct, changes, actor_id, operation_type) do
-    multi
-    |> Multi.run(
-      :changelog,
-      &log_changes_alone(&1, &2, struct, changes, actor_id, operation_type)
-    )
-    |> repo.transaction()
-    |> build_result()
-  end
-
   defp build_result({:ok, %{operation: operation}}), do: {:ok, operation}
   defp build_result({:error, :operation, reason, _changes_so_far}), do: {:error, reason}
-
-  defp log_changes_alone(
-         repo,
-         %{operation: operation} = _multi_acc,
-         _struct_or_changeset,
-         changes,
-         actor_id,
-         operation_type
-       ) do
-    resource = operation.__struct__.__schema__(:source)
-    actor_id_str = to_actor_id_string(actor_id)
-    resource_id_str = to_string(operation.id)
-
-    %{
-      actor_id: actor_id_str,
-      resource: resource,
-      resource_id: resource_id_str,
-      changeset: changes,
-      change_type: operation_type
-    }
-    |> changelog_changeset()
-    |> repo.insert()
-    |> case do
-      {:ok, changelog} ->
-        {:ok, changelog}
-
-      {:error, reason} ->
-        Logger.error(
-          "Failed to store changes in audit log: #{inspect(operation)} " <>
-            "by actor #{inspect(actor_id)}. Reason: #{inspect(reason)}"
-        )
-
-        {:ok, reason}
-    end
-  end
 
   defp log_changes(repo, %{operation: operation} = _multi_acc, struct_or_changeset, actor_id, operation_type) do
     associations = operation.__struct__.__schema__(:associations)
