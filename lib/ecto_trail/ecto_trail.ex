@@ -229,7 +229,7 @@ defmodule EctoTrail do
           "by actor #{inspect(actor_id)}. Reason: #{inspect(error)}"
       )
 
-      {:error, error}
+      {:error, Ecto.Changeset.add_error(%Ecto.Changeset{data: %Changelog{}}, :base, Exception.message(error))}
   end
 
   @doc """
