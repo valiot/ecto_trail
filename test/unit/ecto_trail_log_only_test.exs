@@ -23,7 +23,8 @@ defmodule EctoTrailLogOnlyTest do
 
       ids = Enum.map(structs_list, fn inserted_struct -> inserted_struct.id end)
 
-      assert :ok = result
+      assert {:ok, returned_structs} = result
+      assert length(returned_structs) == length(structs_list)
 
       Enum.each(Enum.zip([ids, changes_list]), fn {an_id, _a_change} ->
         assert %{
@@ -90,7 +91,8 @@ defmodule EctoTrailLogOnlyTest do
       result = TestRepo.log_bulk(structs_list, changes_list, "bulk_actor", :insert)
 
       # Verify successful operation
-      assert :ok = result
+      assert {:ok, returned_structs} = result
+      assert length(returned_structs) == length(structs_list)
 
       # Verify all entries were inserted correctly
       inserted_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "bulk_actor"))
@@ -121,7 +123,8 @@ defmodule EctoTrailLogOnlyTest do
       log_output =
         ExUnit.CaptureLog.capture_log([level: :debug], fn ->
           result = TestRepo.log_bulk(structs_list, changes_list, "write_test_actor", :insert)
-          assert :ok = result
+          assert {:ok, returned_structs} = result
+          assert length(returned_structs) == length(structs_list)
         end)
 
       # Count INSERT operations on audit_log

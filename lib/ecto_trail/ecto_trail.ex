@@ -80,7 +80,7 @@ defmodule EctoTrail do
               changes :: list(Map.t()),
               actor_id :: String.T,
               action_type :: action_type()
-            ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+            ) :: {:ok, list(Ecto.Schema.t())} | {:error, Ecto.Changeset.t()}
       def log_bulk(structs, changes, actor_id, action_type),
         do: EctoTrail.log_bulk(__MODULE__, structs, changes, actor_id, action_type)
 
@@ -167,11 +167,11 @@ defmodule EctoTrail do
           changes :: list(Map.t()),
           actor_id :: String.T,
           action_type :: action_type()
-        ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+        ) :: {:ok, list(Ecto.Schema.t())} | {:error, Ecto.Changeset.t()}
   def log_bulk(repo, structs, changes, actor_id, action_type) do
     # Handle empty input correctly (should succeed like original)
     if Enum.empty?(structs) do
-      :ok
+      {:ok, []}
     else
       actor_id_str = to_actor_id_string(actor_id)
       now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -213,8 +213,8 @@ defmodule EctoTrail do
           # All validations passed, proceed with bulk insert
           case repo.insert_all(Changelog, changelog_entries) do
             {count, _} when count > 0 ->
-              # Return :ok to match original implementation (API spec inconsistency)
-              :ok
+              # Return {:ok, list} to match updated @spec
+              {:ok, structs}
 
             {0, _} ->
               {:error,
