@@ -80,7 +80,7 @@ defmodule EctoTrail do
               changes :: list(Map.t()),
               actor_id :: String.T,
               action_type :: action_type()
-            ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+            ) :: {:ok, list(Ecto.Schema.t())} | {:error, Ecto.Changeset.t()}
       def log_bulk(structs, changes, actor_id, action_type),
         do: EctoTrail.log_bulk(__MODULE__, structs, changes, actor_id, action_type)
 
@@ -167,16 +167,69 @@ defmodule EctoTrail do
           changes :: list(Map.t()),
           actor_id :: String.T,
           action_type :: action_type()
-        ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+        ) :: {:ok, list(Ecto.Schema.t())} | {:error, Ecto.Changeset.t()}
   def log_bulk(repo, structs, changes, actor_id, action_type) do
-    actor_id_str = to_actor_id_string(actor_id)
+    # Handle empty input correctly (should succeed like original)
+    if Enum.empty?(structs) do
+      {:ok, []}
+    else
+      actor_id_str = to_actor_id_string(actor_id)
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    Enum.zip(structs, changes)
-    |> Enum.each(fn {struct, change} ->
-      Multi.new()
-      |> Multi.run(:operation, fn _, _ -> {:ok, struct} end)
-      |> run_logging_transaction_alone(repo, struct, change, actor_id_str, action_type)
-    end)
+      # Prepare changelog entries using proper validation
+      changelog_entries =
+        Enum.zip(structs, changes)
+        |> Enum.map(fn {struct, change} ->
+          resource = struct.__struct__.__schema__(:source)
+          resource_id_str = to_string(struct.id)
+
+          # Use changelog_changeset for proper validation
+          attrs = %{
+            actor_id: actor_id_str,
+            resource: resource,
+            resource_id: resource_id_str,
+            changeset: change,
+            change_type: action_type
+          }
+
+          changeset = changelog_changeset(attrs)
+
+          # Extract validated changes for insert_all
+          if changeset.valid? do
+            # Get the validated changes and add timestamp manually for insert_all
+            changeset.changes
+            |> Map.put(:inserted_at, now)
+          else
+            {:error, changeset}
+          end
+        end)
+
+      # Check if any validation failed
+      case Enum.find(changelog_entries, &match?({:error, _}, &1)) do
+        {:error, changeset} ->
+          {:error, changeset}
+
+        nil ->
+          # All validations passed, proceed with bulk insert
+          case repo.insert_all(Changelog, changelog_entries) do
+            {count, _} when count > 0 ->
+              # Return {:ok, list} to match updated @spec
+              {:ok, structs}
+
+            {0, _} ->
+              {:error,
+               Ecto.Changeset.add_error(%Ecto.Changeset{data: %Changelog{}}, :base, "no records inserted")}
+          end
+      end
+    end
+  rescue
+    error ->
+      Logger.error(
+        "Failed to store bulk changes in audit log: #{inspect(structs)} " <>
+          "by actor #{inspect(actor_id)}. Reason: #{inspect(error)}"
+      )
+
+      {:error, Ecto.Changeset.add_error(%Ecto.Changeset{data: %Changelog{}}, :base, Exception.message(error))}
   end
 
   @doc """
