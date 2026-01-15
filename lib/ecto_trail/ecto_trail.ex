@@ -240,17 +240,25 @@ defmodule EctoTrail do
   defp insert_all_chunks(repo, entries) do
     max_rows_per_chunk = max_rows_per_chunk(entries)
 
-    entries
-    |> Enum.chunk_every(max_rows_per_chunk)
-    |> Enum.reduce_while(0, fn chunk, acc ->
-      case repo.insert_all(Changelog, chunk) do
-        {count, _} when count > 0 ->
-          {:cont, acc + count}
+    case repo.transaction(fn ->
+           entries
+           |> Enum.chunk_every(max_rows_per_chunk)
+           |> Enum.reduce(0, fn chunk, acc ->
+             case repo.insert_all(Changelog, chunk) do
+               {count, _} when count > 0 ->
+                 acc + count
 
-        {0, _} ->
-          {:halt, :no_records_inserted}
-      end
-    end)
+               {0, _} ->
+                 repo.rollback(:no_records_inserted)
+             end
+           end)
+         end) do
+      {:ok, count} ->
+        count
+
+      {:error, :no_records_inserted} ->
+        :no_records_inserted
+    end
   end
 
   defp max_rows_per_chunk([first | _]) do
