@@ -144,5 +144,66 @@ defmodule EctoTrailLogOnlyTest do
       inserted_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "write_test_actor"))
       assert length(inserted_logs) == length(structs_list)
     end
+
+    test "chunks bulk inserts when parameter limit is exceeded" do
+      Application.put_env(:ecto_trail, :max_params, 12)
+
+      on_exit(fn ->
+        Application.delete_env(:ecto_trail, :max_params)
+      end)
+
+      changes_list = [
+        %{name: "Chunk test 1"},
+        %{name: "Chunk test 2"},
+        %{name: "Chunk test 3"},
+        %{name: "Chunk test 4"},
+        %{name: "Chunk test 5"}
+      ]
+
+      dt_now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
+
+      ready_changes =
+        Enum.map(changes_list, fn change ->
+          change
+          |> Map.update(:inserted_at, dt_now, fn dt -> dt end)
+          |> Map.update(:updated_at, dt_now, fn dt -> dt end)
+        end)
+
+      {_n, structs_list} = TestRepo.insert_all(Resource, ready_changes, returning: true)
+
+      max_params = Application.get_env(:ecto_trail, :max_params, 65_535)
+
+      sample_entry = %{
+        actor_id: "chunk_actor",
+        resource: "resources",
+        resource_id: "1",
+        changeset: hd(changes_list),
+        change_type: :insert,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      }
+
+      columns_count = map_size(sample_entry)
+      max_rows_per_chunk = max(div(max_params, columns_count), 1)
+
+      expected_inserts =
+        div(length(structs_list) + max_rows_per_chunk - 1, max_rows_per_chunk)
+
+      log_output =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          result = TestRepo.log_bulk(structs_list, changes_list, "chunk_actor", :insert)
+          assert {:ok, returned_structs} = result
+          assert length(returned_structs) == length(structs_list)
+        end)
+
+      audit_log_inserts =
+        log_output
+        |> String.split("\n")
+        |> Enum.filter(fn line ->
+          String.contains?(line, "INSERT INTO \"audit_log\"") and
+            String.contains?(line, "chunk_actor")
+        end)
+
+      assert length(audit_log_inserts) == expected_inserts
+    end
   end
 end
