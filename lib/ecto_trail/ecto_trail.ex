@@ -261,6 +261,8 @@ defmodule EctoTrail do
     end
   end
 
+  defp max_rows_per_chunk([]), do: 1
+
   defp max_rows_per_chunk([first | _]) do
     columns_count = map_size(first)
     max_params = Application.get_env(:ecto_trail, :max_params, 65_535)
