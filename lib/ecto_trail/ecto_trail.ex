@@ -238,7 +238,8 @@ defmodule EctoTrail do
       {:error, Ecto.Changeset.add_error(%Ecto.Changeset{data: %Changelog{}}, :base, Exception.message(error))}
   end
 
-  defp insert_all_chunks(repo, entries) do
+  # log_bulk/5 handles empty input before calling this helper.
+  defp insert_all_chunks(repo, [_ | _] = entries) do
     chunk_size = max_rows_per_chunk(entries)
 
     # Let insert exceptions bubble to log_bulk/5's rescue so we keep a single error path.
@@ -262,9 +263,6 @@ defmodule EctoTrail do
         :no_records_inserted
     end
   end
-
-  # Defensive guard: log_bulk/5 already handles empty inputs, but keep this safe fallback.
-  defp max_rows_per_chunk([]), do: 1
 
   defp max_rows_per_chunk([first | _]) when map_size(first) > 0 do
     columns_count = map_size(first)
