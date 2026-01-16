@@ -238,12 +238,12 @@ defmodule EctoTrail do
   end
 
   defp insert_all_chunks(repo, entries) do
-    max_rows_per_chunk = max_rows_per_chunk(entries)
+    chunk_size = max_rows_per_chunk(entries)
 
     # Let insert exceptions bubble to log_bulk/5's rescue so we keep a single error path.
     case repo.transaction(fn ->
            entries
-           |> Enum.chunk_every(max_rows_per_chunk)
+           |> Enum.chunk_every(chunk_size)
            |> Enum.reduce(0, fn chunk, acc ->
              case repo.insert_all(Changelog, chunk) do
                {count, _} when count > 0 ->
