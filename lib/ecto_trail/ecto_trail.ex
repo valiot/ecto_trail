@@ -266,11 +266,13 @@ defmodule EctoTrail do
   # Defensive guard: log_bulk/5 already handles empty inputs, but keep this safe fallback.
   defp max_rows_per_chunk([]), do: 1
 
-  defp max_rows_per_chunk([first | _]) do
+  defp max_rows_per_chunk([first | _]) when map_size(first) > 0 do
     columns_count = map_size(first)
     max_params = Application.get_env(:ecto_trail, :max_params, @default_max_params)
-    max(div(max_params, max(columns_count, 1)), 1)
+    max(div(max_params, columns_count), 1)
   end
+
+  defp max_rows_per_chunk([_ | _]), do: 1
 
   @doc """
   Call `c:Ecto.Repo.insert/2` operation and store changes in a `change_log` table.
