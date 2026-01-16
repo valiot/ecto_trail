@@ -53,6 +53,7 @@ defmodule EctoTrail do
 
   # Cache frequently accessed config to avoid repeated lookups
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
+  @default_max_params Application.compile_env(:ecto_trail, :max_params, 65_535)
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
@@ -262,11 +263,12 @@ defmodule EctoTrail do
     end
   end
 
+  # Defensive guard: log_bulk/5 already handles empty inputs, but keep this safe fallback.
   defp max_rows_per_chunk([]), do: 1
 
   defp max_rows_per_chunk([first | _]) do
     columns_count = map_size(first)
-    max_params = Application.get_env(:ecto_trail, :max_params, 65_535)
+    max_params = Application.get_env(:ecto_trail, :max_params, @default_max_params)
     max(div(max_params, max(columns_count, 1)), 1)
   end
 
