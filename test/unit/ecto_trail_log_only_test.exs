@@ -187,6 +187,9 @@ defmodule EctoTrailLogOnlyTest do
         end)
 
       assert length(audit_log_inserts) > 1
+
+      inserted_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "chunk_actor"))
+      assert length(inserted_logs) == length(structs_list)
     end
   end
 end
