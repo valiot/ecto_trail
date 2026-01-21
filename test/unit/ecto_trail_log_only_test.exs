@@ -186,7 +186,8 @@ defmodule EctoTrailLogOnlyTest do
             String.contains?(line, "chunk_actor")
         end)
 
-      assert length(audit_log_inserts) > 1
+      # max_params 12 with 6 params per row => chunk size 2; 5 rows => 3 inserts
+      assert length(audit_log_inserts) == 3
 
       inserted_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "chunk_actor"))
       assert length(inserted_logs) == length(structs_list)
