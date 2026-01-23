@@ -144,5 +144,53 @@ defmodule EctoTrailLogOnlyTest do
       inserted_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "write_test_actor"))
       assert length(inserted_logs) == length(structs_list)
     end
+
+    test "chunks bulk inserts when parameter limit is exceeded" do
+      Application.put_env(:ecto_trail, :max_params, 12)
+
+      on_exit(fn ->
+        Application.delete_env(:ecto_trail, :max_params)
+      end)
+
+      changes_list = [
+        %{name: "Chunk test 1"},
+        %{name: "Chunk test 2"},
+        %{name: "Chunk test 3"},
+        %{name: "Chunk test 4"},
+        %{name: "Chunk test 5"}
+      ]
+
+      dt_now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
+
+      ready_changes =
+        Enum.map(changes_list, fn change ->
+          change
+          |> Map.update(:inserted_at, dt_now, fn dt -> dt end)
+          |> Map.update(:updated_at, dt_now, fn dt -> dt end)
+        end)
+
+      {_n, structs_list} = TestRepo.insert_all(Resource, ready_changes, returning: true)
+
+      log_output =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          result = TestRepo.log_bulk(structs_list, changes_list, "chunk_actor", :insert)
+          assert {:ok, returned_structs} = result
+          assert length(returned_structs) == length(structs_list)
+        end)
+
+      audit_log_inserts =
+        log_output
+        |> String.split("\n")
+        |> Enum.filter(fn line ->
+          String.contains?(line, "INSERT INTO \"audit_log\"") and
+            String.contains?(line, "chunk_actor")
+        end)
+
+      # max_params 12 with 6 params per row => chunk size 2; 5 rows => 3 inserts
+      assert length(audit_log_inserts) == 3
+
+      inserted_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "chunk_actor"))
+      assert length(inserted_logs) == length(structs_list)
+    end
   end
 end

@@ -53,6 +53,7 @@ defmodule EctoTrail do
 
   # Cache frequently accessed config to avoid repeated lookups
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
+  @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
@@ -170,57 +171,62 @@ defmodule EctoTrail do
         ) :: {:ok, list(Ecto.Schema.t())} | {:error, Ecto.Changeset.t()}
   def log_bulk(repo, structs, changes, actor_id, action_type) do
     # Handle empty input correctly (should succeed like original)
-    if Enum.empty?(structs) do
-      {:ok, []}
-    else
-      actor_id_str = to_actor_id_string(actor_id)
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
+    case Enum.empty?(structs) do
+      true ->
+        {:ok, []}
 
-      # Prepare changelog entries using proper validation
-      changelog_entries =
-        Enum.zip(structs, changes)
-        |> Enum.map(fn {struct, change} ->
-          resource = struct.__struct__.__schema__(:source)
-          resource_id_str = to_string(struct.id)
+      false ->
+        actor_id_str = to_actor_id_string(actor_id)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-          # Use changelog_changeset for proper validation
-          attrs = %{
-            actor_id: actor_id_str,
-            resource: resource,
-            resource_id: resource_id_str,
-            changeset: change,
-            change_type: action_type
-          }
+        # Prepare changelog entries using proper validation
+        changelog_entries =
+          Enum.zip(structs, changes)
+          |> Enum.map(fn {struct, change} ->
+            resource = struct.__struct__.__schema__(:source)
+            resource_id_str = to_string(struct.id)
 
-          changeset = changelog_changeset(attrs)
+            # Use changelog_changeset for proper validation
+            attrs = %{
+              actor_id: actor_id_str,
+              resource: resource,
+              resource_id: resource_id_str,
+              changeset: change,
+              change_type: action_type
+            }
 
-          # Extract validated changes for insert_all
-          if changeset.valid? do
-            # Get the validated changes and add timestamp manually for insert_all
-            changeset.changes
-            |> Map.put(:inserted_at, now)
-          else
+            changeset = changelog_changeset(attrs)
+
+            # Extract validated changes for insert_all
+            if changeset.valid? do
+              # Get the validated changes and add timestamp manually for insert_all
+              changeset.changes
+              |> Map.put(:inserted_at, now)
+            else
+              {:error, changeset}
+            end
+          end)
+
+        # Check if any validation failed
+        case Enum.find(changelog_entries, &match?({:error, _}, &1)) do
+          {:error, changeset} ->
             {:error, changeset}
-          end
-        end)
 
-      # Check if any validation failed
-      case Enum.find(changelog_entries, &match?({:error, _}, &1)) do
-        {:error, changeset} ->
-          {:error, changeset}
+          nil ->
+            case insert_all_chunks(repo, changelog_entries) do
+              inserted_count when is_integer(inserted_count) and inserted_count > 0 ->
+                # Return {:ok, list} to match updated @spec
+                {:ok, structs}
 
-        nil ->
-          # All validations passed, proceed with bulk insert
-          case repo.insert_all(Changelog, changelog_entries) do
-            {count, _} when count > 0 ->
-              # Return {:ok, list} to match updated @spec
-              {:ok, structs}
-
-            {0, _} ->
-              {:error,
-               Ecto.Changeset.add_error(%Ecto.Changeset{data: %Changelog{}}, :base, "no records inserted")}
-          end
-      end
+              :no_records_inserted ->
+                {:error,
+                 Ecto.Changeset.add_error(
+                   %Ecto.Changeset{data: %Changelog{}},
+                   :base,
+                   "no records inserted"
+                 )}
+            end
+        end
     end
   rescue
     error ->
@@ -231,6 +237,40 @@ defmodule EctoTrail do
 
       {:error, Ecto.Changeset.add_error(%Ecto.Changeset{data: %Changelog{}}, :base, Exception.message(error))}
   end
+
+  # log_bulk/5 handles empty input before calling this helper.
+  defp insert_all_chunks(repo, [_ | _] = entries) do
+    chunk_size = max_rows_per_chunk(entries)
+
+    # Let insert exceptions bubble to log_bulk/5's rescue so we keep a single error path.
+    case repo.transaction(fn ->
+           entries
+           |> Enum.chunk_every(chunk_size)
+           |> Enum.reduce(0, fn chunk, acc ->
+             case repo.insert_all(Changelog, chunk) do
+               {count, _} when count > 0 ->
+                 acc + count
+
+               {0, _} ->
+                 repo.rollback(:no_records_inserted)
+             end
+           end)
+         end) do
+      {:ok, count} ->
+        count
+
+      {:error, :no_records_inserted} ->
+        :no_records_inserted
+    end
+  end
+
+  defp max_rows_per_chunk([first | _]) when map_size(first) > 0 do
+    columns_count = map_size(first)
+    max_params = Application.get_env(:ecto_trail, :max_params, @default_max_params)
+    max(div(max_params, columns_count), 1)
+  end
+
+  defp max_rows_per_chunk([_ | _]), do: 1
 
   @doc """
   Call `c:Ecto.Repo.insert/2` operation and store changes in a `change_log` table.
