@@ -45,8 +45,8 @@ defmodule EctoTrail do
   5. Use logging functions instead of defaults. See `EctoTrail` module docs.
   """
   alias Ecto.Changeset
-  alias EctoTrail.Changelog
   alias Ecto.Multi
+  alias EctoTrail.Changelog
   require Logger
 
   @type action_type :: :insert | :update | :upsert | :delete
@@ -169,64 +169,29 @@ defmodule EctoTrail do
           actor_id :: String.T,
           action_type :: action_type()
         ) :: {:ok, list(Ecto.Schema.t())} | {:error, Ecto.Changeset.t()}
+  def log_bulk(_repo, [], _changes, _actor_id, _action_type), do: {:ok, []}
+
   def log_bulk(repo, structs, changes, actor_id, action_type) do
-    # Handle empty input correctly (should succeed like original)
-    case Enum.empty?(structs) do
-      true ->
-        {:ok, []}
+    actor_id_str = to_actor_id_string(actor_id)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      false ->
-        actor_id_str = to_actor_id_string(actor_id)
-        now = DateTime.utc_now() |> DateTime.truncate(:second)
+    changelog_entries = build_changelog_entries(structs, changes, actor_id_str, action_type, now)
 
-        # Prepare changelog entries using proper validation
-        changelog_entries =
-          Enum.zip(structs, changes)
-          |> Enum.map(fn {struct, change} ->
-            resource = struct.__struct__.__schema__(:source)
-            resource_id_str = to_string(struct.id)
+    with :ok <- validate_changelog_entries(changelog_entries),
+         inserted_count when is_integer(inserted_count) and inserted_count > 0 <-
+           insert_all_chunks(repo, changelog_entries) do
+      {:ok, structs}
+    else
+      {:error, changeset} ->
+        {:error, changeset}
 
-            # Use changelog_changeset for proper validation
-            attrs = %{
-              actor_id: actor_id_str,
-              resource: resource,
-              resource_id: resource_id_str,
-              changeset: change,
-              change_type: action_type
-            }
-
-            changeset = changelog_changeset(attrs)
-
-            # Extract validated changes for insert_all
-            if changeset.valid? do
-              # Get the validated changes and add timestamp manually for insert_all
-              changeset.changes
-              |> Map.put(:inserted_at, now)
-            else
-              {:error, changeset}
-            end
-          end)
-
-        # Check if any validation failed
-        case Enum.find(changelog_entries, &match?({:error, _}, &1)) do
-          {:error, changeset} ->
-            {:error, changeset}
-
-          nil ->
-            case insert_all_chunks(repo, changelog_entries) do
-              inserted_count when is_integer(inserted_count) and inserted_count > 0 ->
-                # Return {:ok, list} to match updated @spec
-                {:ok, structs}
-
-              :no_records_inserted ->
-                {:error,
-                 Ecto.Changeset.add_error(
-                   %Ecto.Changeset{data: %Changelog{}},
-                   :base,
-                   "no records inserted"
-                 )}
-            end
-        end
+      :no_records_inserted ->
+        {:error,
+         Ecto.Changeset.add_error(
+           %Ecto.Changeset{data: %Changelog{}},
+           :base,
+           "no records inserted"
+         )}
     end
   rescue
     error ->
@@ -246,21 +211,17 @@ defmodule EctoTrail do
     case repo.transaction(fn ->
            entries
            |> Enum.chunk_every(chunk_size)
-           |> Enum.reduce(0, fn chunk, acc ->
-             case repo.insert_all(Changelog, chunk) do
-               {count, _} when count > 0 ->
-                 acc + count
-
-               {0, _} ->
-                 repo.rollback(:no_records_inserted)
-             end
-           end)
+           |> Enum.reduce(0, &insert_chunk(repo, &1, &2))
          end) do
-      {:ok, count} ->
-        count
+      {:ok, count} -> count
+      {:error, :no_records_inserted} -> :no_records_inserted
+    end
+  end
 
-      {:error, :no_records_inserted} ->
-        :no_records_inserted
+  defp insert_chunk(repo, chunk, acc) do
+    case repo.insert_all(Changelog, chunk) do
+      {count, _} when count > 0 -> acc + count
+      {0, _} -> repo.rollback(:no_records_inserted)
     end
   end
 
@@ -271,6 +232,37 @@ defmodule EctoTrail do
   end
 
   defp max_rows_per_chunk([_ | _]), do: 1
+
+  defp build_changelog_entries(structs, changes, actor_id_str, action_type, now) do
+    Enum.zip(structs, changes)
+    |> Enum.map(fn {struct, change} ->
+      resource = struct.__struct__.__schema__(:source)
+      resource_id_str = to_string(struct.id)
+
+      attrs = %{
+        actor_id: actor_id_str,
+        resource: resource,
+        resource_id: resource_id_str,
+        changeset: change,
+        change_type: action_type
+      }
+
+      changeset = changelog_changeset(attrs)
+
+      if changeset.valid? do
+        Map.put(changeset.changes, :inserted_at, now)
+      else
+        {:error, changeset}
+      end
+    end)
+  end
+
+  defp validate_changelog_entries(entries) do
+    case Enum.find(entries, &match?({:error, _}, &1)) do
+      {:error, _changeset} = error -> error
+      nil -> :ok
+    end
+  end
 
   @doc """
   Call `c:Ecto.Repo.insert/2` operation and store changes in a `change_log` table.
@@ -539,21 +531,17 @@ defmodule EctoTrail do
   defp get_assoc_changes(changeset, associations) do
     Enum.reduce(associations, changeset, fn assoc, acc ->
       case Map.get(acc, assoc) do
-        nil ->
-          acc
-
-        assoc_changes when is_struct(assoc_changes) ->
-          if not_loaded?(assoc_changes) do
-            Map.put(acc, assoc, nil)
-          else
-            Map.put(acc, assoc, get_changes(assoc_changes))
-          end
-
-        assoc_changes ->
-          Map.put(acc, assoc, get_changes(assoc_changes))
+        nil -> acc
+        assoc_changes -> Map.put(acc, assoc, resolve_assoc_change(assoc_changes))
       end
     end)
   end
+
+  defp resolve_assoc_change(assoc_changes) when is_struct(assoc_changes) do
+    if not_loaded?(assoc_changes), do: nil, else: get_changes(assoc_changes)
+  end
+
+  defp resolve_assoc_change(assoc_changes), do: get_changes(assoc_changes)
 
   defp map_custom_ecto_types(changes) do
     Map.new(changes, &map_custom_ecto_type/1)
