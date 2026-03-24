@@ -199,6 +199,54 @@ defmodule EctoTrailTest do
     end
   end
 
+  describe "update_and_log/3 inside Ecto.Multi" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "name"})
+      {:ok, %{schema: schema}}
+    end
+
+    test "works when called from within an Ecto.Multi.run callback", %{schema: schema} do
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:update_resource, fn _repo, _changes ->
+          schema
+          |> Changeset.change(%{name: "updated inside multi"})
+          |> TestRepo.update_and_log("cowboy")
+        end)
+
+      assert {:ok, %{update_resource: %Resource{name: "updated inside multi"}}} =
+               TestRepo.transaction(multi)
+
+      resource = TestRepo.one(Resource)
+      resource_id = to_string(resource.id)
+
+      assert %{
+               changeset: %{"name" => "updated inside multi"},
+               actor_id: "cowboy",
+               resource_id: ^resource_id,
+               resource: "resources",
+               change_type: :update
+             } = TestRepo.one(Changelog)
+    end
+
+    test "returns error without crashing when update fails inside Multi", %{schema: schema} do
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:update_resource, fn _repo, _changes ->
+          schema
+          |> Changeset.change(%{name: "new name"})
+          |> Changeset.add_error(:name, "invalid")
+          |> TestRepo.update_and_log("cowboy")
+        end)
+
+      assert {:error, :update_resource, %Changeset{valid?: false}, _} =
+               TestRepo.transaction(multi)
+
+      assert [%{name: "name"}] = TestRepo.all(Resource)
+      assert [] == TestRepo.all(Changelog)
+    end
+  end
+
   describe "upsert_and_log/3" do
     setup do
       {:ok, schema} = TestRepo.insert(%Resource{name: "name"})
