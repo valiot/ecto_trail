@@ -225,4 +225,36 @@ defmodule EctoTrailTest do
              } = TestRepo.one(Changelog)
     end
   end
+
+  describe "Ecto.Multi compose support (avoids nested tx + unexpected rollback)" do
+    test "insert_and_log/5 can be piped into multi and executes atomically with log" do
+      multi =
+        Ecto.Multi.new()
+        |> TestRepo.insert_and_log(:res, %Resource{name: "multi-name"}, "multi-actor", [])
+
+      assert {:ok, results} = TestRepo.transaction(multi)
+      assert %Resource{name: "multi-name"} = results[:res]
+      changelog = TestRepo.one(Changelog)
+      assert changelog.actor_id == "multi-actor"
+      assert changelog.change_type == :insert
+      assert changelog.resource == "resources"
+    end
+
+    test "update_and_log/5 and delete_and_log/5 work when composed into multi" do
+      {:ok, inserted} = TestRepo.insert(%Resource{name: "to-update"})
+
+      multi =
+        Ecto.Multi.new()
+        |> TestRepo.update_and_log(:upd, Changeset.change(inserted, %{name: "updated"}), "multi-actor", [])
+        |> TestRepo.delete_and_log(:del, inserted, "multi-actor", [])
+
+      assert {:ok, results} = TestRepo.transaction(multi)
+      assert %Resource{name: "updated"} = results[:upd]
+      assert %Resource{} = results[:del]
+      logs = TestRepo.all(Changelog)
+      assert length(logs) == 2
+      assert Enum.any?(logs, &(&1.change_type == :update and &1.actor_id == "multi-actor"))
+      assert Enum.any?(logs, &(&1.change_type == :delete and &1.actor_id == "multi-actor"))
+    end
+  end
 end

@@ -70,8 +70,27 @@ defmodule EctoTrail do
               actor_id :: String.T,
               action_type :: action_type()
             ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
-      def log(struct_or_changeset, changes, actor_id, action_type),
-        do: EctoTrail.log(__MODULE__, struct_or_changeset, changes, actor_id, action_type)
+      def log(first, second, actor_id, action_type) do
+        case first do
+          %Ecto.Multi{} = multi ->
+            EctoTrail.log(multi, second, actor_id, action_type)
+
+          _ ->
+            EctoTrail.log(__MODULE__, first, second, actor_id, action_type)
+        end
+      end
+
+      @doc """
+      Append a changelog step (using auto-extracted changes from prior op result) to a multi.
+      """
+      def log(multi, name, actor_id, action_type),
+        do: EctoTrail.log(multi, name, actor_id, action_type)
+
+      @doc """
+      Append a changelog step with explicit changes to a multi.
+      """
+      def log(multi, name, changes, actor_id, action_type),
+        do: EctoTrail.log(multi, name, changes, actor_id, action_type)
 
       @doc """
       Store bulk changes in a `change_log` table.
@@ -99,6 +118,19 @@ defmodule EctoTrail do
         do: EctoTrail.insert_and_log(__MODULE__, struct_or_changeset, actor_id, opts)
 
       @doc """
+      Compose insert + changelog into an Ecto.Multi (no nested transaction).
+      """
+      @spec insert_and_log(
+              multi :: Ecto.Multi.t(),
+              name :: atom(),
+              struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
+              actor_id :: String.T,
+              opts :: Keyword.t()
+            ) :: Ecto.Multi.t()
+      def insert_and_log(multi, name, struct_or_changeset, actor_id, opts),
+        do: EctoTrail.insert_and_log(multi, name, struct_or_changeset, actor_id, opts)
+
+      @doc """
       Call `c:Ecto.Repo.update/2` operation and store changes in a `change_log` table.
 
       Insert arguments, return and options same as `c:Ecto.Repo.update/2` has.
@@ -112,6 +144,19 @@ defmodule EctoTrail do
               | {:error, Ecto.Changeset.t()}
       def update_and_log(changeset, actor_id, opts \\ []),
         do: EctoTrail.update_and_log(__MODULE__, changeset, actor_id, opts)
+
+      @doc """
+      Compose update + changelog into an Ecto.Multi (no nested transaction).
+      """
+      @spec update_and_log(
+              multi :: Ecto.Multi.t(),
+              name :: atom(),
+              changeset :: Ecto.Changeset.t(),
+              actor_id :: String.T,
+              opts :: Keyword.t()
+            ) :: Ecto.Multi.t()
+      def update_and_log(multi, name, changeset, actor_id, opts),
+        do: EctoTrail.update_and_log(multi, name, changeset, actor_id, opts)
 
       @doc """
       Call `c:Ecto.Repo.upsert/2` operation and store changes in a `change_log` table.
@@ -129,6 +174,19 @@ defmodule EctoTrail do
         do: EctoTrail.upsert_and_log(__MODULE__, struct_or_changeset, actor_id, opts)
 
       @doc """
+      Compose upsert + changelog into an Ecto.Multi (no nested transaction).
+      """
+      @spec upsert_and_log(
+              multi :: Ecto.Multi.t(),
+              name :: atom(),
+              struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
+              actor_id :: String.T,
+              opts :: Keyword.t()
+            ) :: Ecto.Multi.t()
+      def upsert_and_log(multi, name, struct_or_changeset, actor_id, opts),
+        do: EctoTrail.upsert_and_log(multi, name, struct_or_changeset, actor_id, opts)
+
+      @doc """
       Call `c:Ecto.Repo.delete/2` operation and store deleted objext in a `change_log` table.
       """
       @spec delete_and_log(
@@ -140,7 +198,37 @@ defmodule EctoTrail do
               | {:error, Ecto.Changeset.t()}
       def delete_and_log(struct_or_changeset, actor_id, opts \\ []),
         do: EctoTrail.delete_and_log(__MODULE__, struct_or_changeset, actor_id, opts)
+
+      @doc """
+      Compose delete + changelog into an Ecto.Multi (no nested transaction).
+      """
+      @spec delete_and_log(
+              multi :: Ecto.Multi.t(),
+              name :: atom(),
+              struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
+              actor_id :: String.T,
+              opts :: Keyword.t()
+            ) :: Ecto.Multi.t()
+      def delete_and_log(multi, name, struct_or_changeset, actor_id, opts),
+        do: EctoTrail.delete_and_log(multi, name, struct_or_changeset, actor_id, opts)
     end
+  end
+
+  @doc """
+  Append a changelog step for a prior multi operation (auto-extracted changes from the op result).
+  Safe to use inside Ecto.Multi pipelines.
+  """
+  def log(%Multi{} = multi, name, actor_id, action_type) do
+    append_log_step(multi, name, nil, actor_id, action_type)
+  end
+
+  def log(%Multi{} = multi, name, changes, actor_id, action_type) do
+    log_name = {:changelog, name}
+
+    Multi.run(multi, log_name, fn repo, acc ->
+      operation = Map.fetch!(acc, name)
+      log_changes_alone(repo, operation, changes, actor_id, action_type)
+    end)
   end
 
   @doc """
@@ -156,7 +244,7 @@ defmodule EctoTrail do
   def log(repo, struct_or_changeset, changes, actor_id, action_type) do
     Multi.new()
     |> Multi.run(:operation, fn _, _ -> {:ok, struct_or_changeset} end)
-    |> run_logging_transaction_alone(repo, struct_or_changeset, changes, actor_id, action_type)
+    |> run_logging_transaction_alone(repo, changes, actor_id, action_type)
   end
 
   @doc """
@@ -268,6 +356,7 @@ defmodule EctoTrail do
   Call `c:Ecto.Repo.insert/2` operation and store changes in a `change_log` table.
 
   Insert arguments, return and options same as `c:Ecto.Repo.insert/2` has.
+  For use inside Ecto.Multi, see 5-arity version.
   """
   @spec insert_and_log(
           repo :: Ecto.Repo.t(),
@@ -275,16 +364,34 @@ defmodule EctoTrail do
           actor_id :: String.T,
           opts :: Keyword.t()
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
-  def insert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
+  def insert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) when is_atom(repo) do
     Multi.new()
-    |> Multi.insert(:operation, struct_or_changeset, opts)
-    |> run_logging_transaction(repo, struct_or_changeset, actor_id, :insert)
+    |> insert_and_log(:operation, struct_or_changeset, actor_id, opts)
+    |> repo.transaction()
+    |> build_result()
+  end
+
+  @doc """
+  Append an insert operation and its changelog to a multi (safe for Ecto.Multi, no nested tx).
+  """
+  @spec insert_and_log(
+          multi :: Ecto.Multi.t(),
+          name :: atom(),
+          struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
+          actor_id :: String.T,
+          opts :: Keyword.t()
+        ) :: Ecto.Multi.t()
+  def insert_and_log(%Multi{} = multi, name, struct_or_changeset, actor_id, opts) do
+    multi
+    |> Multi.insert(name, struct_or_changeset, opts)
+    |> append_log_step(name, struct_or_changeset, actor_id, :insert)
   end
 
   @doc """
   Call `c:Ecto.Repo.update/2` operation and store changes in a `change_log` table.
 
   Insert arguments, return and options same as `c:Ecto.Repo.update/2` has.
+  For use inside Ecto.Multi, see 5-arity version.
   """
   @spec update_and_log(
           repo :: Ecto.Repo.t(),
@@ -294,16 +401,34 @@ defmodule EctoTrail do
         ) ::
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
-  def update_and_log(repo, changeset, actor_id, opts \\ []) do
+  def update_and_log(repo, changeset, actor_id, opts \\ []) when is_atom(repo) do
     Multi.new()
-    |> Multi.update(:operation, changeset, opts)
-    |> run_logging_transaction(repo, changeset, actor_id, :update)
+    |> update_and_log(:operation, changeset, actor_id, opts)
+    |> repo.transaction()
+    |> build_result()
+  end
+
+  @doc """
+  Append an update operation and its changelog to a multi (safe for Ecto.Multi, no nested tx).
+  """
+  @spec update_and_log(
+          multi :: Ecto.Multi.t(),
+          name :: atom(),
+          changeset :: Ecto.Changeset.t(),
+          actor_id :: String.T,
+          opts :: Keyword.t()
+        ) :: Ecto.Multi.t()
+  def update_and_log(%Multi{} = multi, name, changeset, actor_id, opts) do
+    multi
+    |> Multi.update(name, changeset, opts)
+    |> append_log_step(name, changeset, actor_id, :update)
   end
 
   @doc """
   Call `c:Ecto.Repo.upsert/2` operation and store changes in a `change_log` table.
 
   Insert arguments, return and options same as `c:Ecto.Repo.upsert/2` has.
+  For use inside Ecto.Multi, see 5-arity version.
   """
   @spec upsert_and_log(
           repo :: Ecto.Repo.t(),
@@ -313,10 +438,27 @@ defmodule EctoTrail do
         ) ::
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
-  def upsert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
+  def upsert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) when is_atom(repo) do
     Multi.new()
-    |> Multi.insert_or_update(:operation, struct_or_changeset, opts)
-    |> run_logging_transaction(repo, struct_or_changeset, actor_id, :upsert)
+    |> upsert_and_log(:operation, struct_or_changeset, actor_id, opts)
+    |> repo.transaction()
+    |> build_result()
+  end
+
+  @doc """
+  Append an upsert operation and its changelog to a multi (safe for Ecto.Multi, no nested tx).
+  """
+  @spec upsert_and_log(
+          multi :: Ecto.Multi.t(),
+          name :: atom(),
+          struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
+          actor_id :: String.T,
+          opts :: Keyword.t()
+        ) :: Ecto.Multi.t()
+  def upsert_and_log(%Multi{} = multi, name, struct_or_changeset, actor_id, opts) do
+    multi
+    |> Multi.insert_or_update(name, struct_or_changeset, opts)
+    |> append_log_step(name, struct_or_changeset, actor_id, :upsert)
   end
 
   @doc """
@@ -330,25 +472,44 @@ defmodule EctoTrail do
         ) ::
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
-  def delete_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
+  def delete_and_log(repo, struct_or_changeset, actor_id, opts \\ []) when is_atom(repo) do
     Multi.new()
-    |> Multi.delete(:operation, struct_or_changeset, opts)
-    |> run_logging_transaction(repo, struct_or_changeset, actor_id, :delete)
-  end
-
-  defp run_logging_transaction(multi, repo, struct_or_changeset, actor_id, operation_type) do
-    multi
-    |> Multi.run(:changelog, &log_changes(&1, &2, struct_or_changeset, actor_id, operation_type))
+    |> delete_and_log(:operation, struct_or_changeset, actor_id, opts)
     |> repo.transaction()
     |> build_result()
   end
 
-  defp run_logging_transaction_alone(multi, repo, struct, changes, actor_id, operation_type) do
+  @doc """
+  Append a delete operation and its changelog to a multi (safe for Ecto.Multi, no nested tx).
+  """
+  @spec delete_and_log(
+          multi :: Ecto.Multi.t(),
+          name :: atom(),
+          struct_or_changeset :: Ecto.Schema.t() | Ecto.Changeset.t(),
+          actor_id :: String.T,
+          opts :: Keyword.t()
+        ) :: Ecto.Multi.t()
+  def delete_and_log(%Multi{} = multi, name, struct_or_changeset, actor_id, opts) do
     multi
-    |> Multi.run(
-      :changelog,
-      &log_changes_alone(&1, &2, struct, changes, actor_id, operation_type)
-    )
+    |> Multi.delete(name, struct_or_changeset, opts)
+    |> append_log_step(name, struct_or_changeset, actor_id, :delete)
+  end
+
+  defp append_log_step(multi, name, input, actor_id, operation_type) do
+    log_name = {:changelog, name}
+
+    Multi.run(multi, log_name, fn repo, acc ->
+      operation = Map.fetch!(acc, name)
+      input = if is_nil(input), do: operation, else: input
+      log_changes(repo, operation, input, actor_id, operation_type)
+    end)
+  end
+
+  defp run_logging_transaction_alone(multi, repo, changes, actor_id, operation_type) do
+    multi
+    |> Multi.run(:changelog, fn repo, acc ->
+      log_changes_alone(repo, acc[:operation], changes, actor_id, operation_type)
+    end)
     |> repo.transaction()
     |> build_result()
   end
@@ -358,8 +519,7 @@ defmodule EctoTrail do
 
   defp log_changes_alone(
          repo,
-         %{operation: operation} = _multi_acc,
-         _struct_or_changeset,
+         operation,
          changes,
          actor_id,
          operation_type
@@ -391,7 +551,7 @@ defmodule EctoTrail do
     end
   end
 
-  defp log_changes(repo, %{operation: operation} = _multi_acc, struct_or_changeset, actor_id, operation_type) do
+  defp log_changes(repo, operation, struct_or_changeset, actor_id, operation_type) do
     associations = operation.__struct__.__schema__(:associations)
     resource = operation.__struct__.__schema__(:source)
     embeds = operation.__struct__.__schema__(:embeds)
