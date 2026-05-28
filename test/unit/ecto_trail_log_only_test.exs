@@ -192,5 +192,35 @@ defmodule EctoTrailLogOnlyTest do
       inserted_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "chunk_actor"))
       assert length(inserted_logs) == length(structs_list)
     end
+
+    test "log_bulk inside Ecto.Multi (with subsequent multi rollback) does not raise RuntimeError for unexpected rollback" do
+      changes_list = [%{name: "m1"}]
+
+      dt_now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
+
+      ready_changes =
+        Enum.map(changes_list, fn change ->
+          change
+          |> Map.put(:inserted_at, dt_now)
+          |> Map.put(:updated_at, dt_now)
+        end)
+
+      {_n, structs_list} = TestRepo.insert_all(Resource, ready_changes, returning: true)
+
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:do_log, fn repo, _ ->
+          # exercise log_bulk under Ecto.Multi tx (as happens in upsertBulkWorkflows etc)
+          repo.log_bulk(structs_list, changes_list, "multi_rollback_actor", :insert)
+        end)
+        |> Ecto.Multi.run(:force_rollback, fn _repo, _ ->
+          # trigger rollback path in the multi after logging nested tx
+          {:error, :forced_for_test}
+        end)
+
+      # must not raise ** (RuntimeError) operation :rollback is rolling back unexpectedly.
+      # from inside ecto_trail's transaction wrapper
+      assert {:error, :force_rollback, :forced_for_test, _changes} = TestRepo.transaction(multi)
+    end
   end
 end

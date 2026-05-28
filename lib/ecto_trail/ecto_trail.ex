@@ -208,20 +208,22 @@ defmodule EctoTrail do
     chunk_size = max_rows_per_chunk(entries)
 
     # Let insert exceptions bubble to log_bulk/5's rescue so we keep a single error path.
+    # Return {:error, reason} from the tx fun (instead of calling repo.rollback inside)
+    # so that Ecto's transaction wrapper performs the rollback. This avoids triggering
+    # "operation :rollback is rolling back unexpectedly" when log_bulk is called from
+    # within an Ecto.Multi (nested tx + manual rollback detection).
     case repo.transaction(fn ->
            entries
            |> Enum.chunk_every(chunk_size)
-           |> Enum.reduce(0, &insert_chunk(repo, &1, &2))
+           |> Enum.reduce_while(0, fn chunk, acc ->
+             case repo.insert_all(Changelog, chunk) do
+               {count, _} when count > 0 -> {:cont, acc + count}
+               {0, _} -> {:halt, {:error, :no_records_inserted}}
+             end
+           end)
          end) do
-      {:ok, count} -> count
+      {:ok, count} when is_integer(count) -> count
       {:error, :no_records_inserted} -> :no_records_inserted
-    end
-  end
-
-  defp insert_chunk(repo, chunk, acc) do
-    case repo.insert_all(Changelog, chunk) do
-      {count, _} when count > 0 -> acc + count
-      {0, _} -> repo.rollback(:no_records_inserted)
     end
   end
 
