@@ -245,6 +245,90 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "works with multiple sequential updates inside Multi", %{schema: schema} do
+      {:ok, schema2} = TestRepo.insert(%Resource{name: "second"})
+
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:update_first, fn _repo, _changes ->
+          schema
+          |> Changeset.change(%{name: "first updated"})
+          |> TestRepo.update_and_log("cowboy")
+        end)
+        |> Ecto.Multi.run(:update_second, fn _repo, _changes ->
+          schema2
+          |> Changeset.change(%{name: "second updated"})
+          |> TestRepo.update_and_log("cowboy")
+        end)
+
+      assert {:ok,
+              %{
+                update_first: %Resource{name: "first updated"},
+                update_second: %Resource{name: "second updated"}
+              }} = TestRepo.transaction(multi)
+
+      assert 2 == TestRepo.aggregate(Changelog, :count)
+    end
+  end
+
+  describe "insert_and_log/3 inside Ecto.Multi" do
+    test "works when called from within an Ecto.Multi.run callback" do
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:insert_resource, fn _repo, _changes ->
+          %Resource{}
+          |> Changeset.change(%{name: "inserted inside multi"})
+          |> TestRepo.insert_and_log("cowboy")
+        end)
+
+      assert {:ok, %{insert_resource: %Resource{name: "inserted inside multi"}}} =
+               TestRepo.transaction(multi)
+
+      assert 1 == TestRepo.aggregate(Changelog, :count)
+    end
+  end
+
+  describe "upsert_and_log/3 inside Ecto.Multi" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "upsert-target"})
+      {:ok, %{schema: schema}}
+    end
+
+    test "works when called from within an Ecto.Multi.run callback", %{schema: schema} do
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:upsert_resource, fn _repo, _changes ->
+          schema
+          |> Changeset.change(%{name: "upserted inside multi"})
+          |> TestRepo.upsert_and_log("cowboy")
+        end)
+
+      assert {:ok, %{upsert_resource: %Resource{name: "upserted inside multi"}}} =
+               TestRepo.transaction(multi)
+
+      assert 1 == TestRepo.aggregate(Changelog, :count)
+    end
+  end
+
+  describe "delete_and_log/3 inside Ecto.Multi" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "delete-target"})
+      {:ok, %{schema: schema}}
+    end
+
+    test "works when called from within an Ecto.Multi.run callback", %{schema: schema} do
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:delete_resource, fn _repo, _changes ->
+          TestRepo.delete_and_log(schema, "cowboy")
+        end)
+
+      assert {:ok, %{delete_resource: %Resource{}}} = TestRepo.transaction(multi)
+
+      assert [] == TestRepo.all(Resource)
+      assert 1 == TestRepo.aggregate(Changelog, :count)
+    end
   end
 
   describe "upsert_and_log/3" do
