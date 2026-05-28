@@ -225,4 +225,22 @@ defmodule EctoTrailTest do
              } = TestRepo.one(Changelog)
     end
   end
+
+  describe "and_log functions when called inside Ecto.Multi" do
+    test "insert_and_log can be called from within a Multi.run without raising" do
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:via_log, fn repo, _changes ->
+          repo.insert_and_log(%Resource{name: "from-multi"}, "multi-actor")
+        end)
+
+      assert {:ok, %{via_log: %Resource{name: "from-multi"}}} = TestRepo.transaction(multi)
+
+      assert %Changelog{
+               actor_id: "multi-actor",
+               change_type: :insert,
+               resource: "resources"
+             } = TestRepo.one(Changelog)
+    end
+  end
 end
