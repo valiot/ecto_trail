@@ -283,19 +283,16 @@ defmodule EctoTrail do
           opts :: Keyword.t()
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def insert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
-    case repo.transaction(fn tx_repo ->
-           case tx_repo.insert(struct_or_changeset, opts) do
-             {:ok, operation} ->
-               log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :insert)
-               operation
+    repo.transaction(fn tx_repo ->
+      case tx_repo.insert(struct_or_changeset, opts) do
+        {:ok, operation} ->
+          log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :insert)
+          operation
 
-             {:error, reason} ->
-               tx_repo.rollback(reason)
-           end
-         end) do
-      {:error, reason} -> {:error, reason}
-      operation -> {:ok, operation}
-    end
+        {:error, reason} ->
+          tx_repo.rollback(reason)
+      end
+    end)
   end
 
   @doc """
@@ -312,19 +309,16 @@ defmodule EctoTrail do
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
   def update_and_log(repo, changeset, actor_id, opts \\ []) do
-    case repo.transaction(fn tx_repo ->
-           case tx_repo.update(changeset, opts) do
-             {:ok, operation} ->
-               log_changes(tx_repo, %{operation: operation}, changeset, actor_id, :update)
-               operation
+    repo.transaction(fn tx_repo ->
+      case tx_repo.update(changeset, opts) do
+        {:ok, operation} ->
+          log_changes(tx_repo, %{operation: operation}, changeset, actor_id, :update)
+          operation
 
-             {:error, reason} ->
-               tx_repo.rollback(reason)
-           end
-         end) do
-      {:error, reason} -> {:error, reason}
-      operation -> {:ok, operation}
-    end
+        {:error, reason} ->
+          tx_repo.rollback(reason)
+      end
+    end)
   end
 
   @doc """
@@ -341,19 +335,16 @@ defmodule EctoTrail do
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
   def upsert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
-    case repo.transaction(fn tx_repo ->
-           case tx_repo.insert_or_update(struct_or_changeset, opts) do
-             {:ok, operation} ->
-               log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :upsert)
-               operation
+    repo.transaction(fn tx_repo ->
+      case tx_repo.insert_or_update(struct_or_changeset, opts) do
+        {:ok, operation} ->
+          log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :upsert)
+          operation
 
-             {:error, reason} ->
-               tx_repo.rollback(reason)
-           end
-         end) do
-      {:error, reason} -> {:error, reason}
-      operation -> {:ok, operation}
-    end
+        {:error, reason} ->
+          tx_repo.rollback(reason)
+      end
+    end)
   end
 
   @doc """
@@ -368,19 +359,16 @@ defmodule EctoTrail do
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
   def delete_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
-    case repo.transaction(fn tx_repo ->
-           case tx_repo.delete(struct_or_changeset, opts) do
-             {:ok, operation} ->
-               log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :delete)
-               operation
+    repo.transaction(fn tx_repo ->
+      case tx_repo.delete(struct_or_changeset, opts) do
+        {:ok, operation} ->
+          log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :delete)
+          operation
 
-             {:error, reason} ->
-               tx_repo.rollback(reason)
-           end
-         end) do
-      {:error, reason} -> {:error, reason}
-      operation -> {:ok, operation}
-    end
+        {:error, reason} ->
+          tx_repo.rollback(reason)
+      end
+    end)
   end
 
   defp log_changes_alone(
