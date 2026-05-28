@@ -266,5 +266,67 @@ defmodule EctoTrailTest do
                from(c in Changelog, where: c.change_type == :update and c.actor_id == "multi-actor")
              )
     end
+
+    test "upsert_and_log succeeds when invoked from within Multi" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "to-upsert"})
+
+      multi =
+        Multi.new()
+        |> Multi.run(:upserted, fn repo, _ ->
+          res
+          |> Changeset.change(%{name: "upserted-in-multi"})
+          |> repo.upsert_and_log("multi-actor")
+        end)
+
+      assert {:ok, %{upserted: %Resource{name: "upserted-in-multi"}}} =
+               TestRepo.transaction(multi)
+
+      assert TestRepo.exists?(
+               from(c in Changelog, where: c.change_type == :upsert and c.actor_id == "multi-actor")
+             )
+    end
+
+    test "delete_and_log succeeds when invoked from within Multi" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "to-delete"})
+
+      multi =
+        Multi.new()
+        |> Multi.run(:deleted, fn repo, _ ->
+          repo.delete_and_log(res, "multi-actor")
+        end)
+
+      assert {:ok, %{deleted: %Resource{name: "to-delete"}}} = TestRepo.transaction(multi)
+      assert is_nil(TestRepo.get(Resource, res.id))
+
+      assert TestRepo.exists?(
+               from(c in Changelog, where: c.change_type == :delete and c.actor_id == "multi-actor")
+             )
+    end
+
+    test "multiple sequential *_and_log calls inside one Multi" do
+      {:ok, a} = TestRepo.insert(%Resource{name: "seq-a"})
+      {:ok, b} = TestRepo.insert(%Resource{name: "seq-b"})
+
+      multi =
+        Multi.new()
+        |> Multi.run(:update_a, fn repo, _ ->
+          a |> Changeset.change(%{name: "seq-a-v2"}) |> repo.update_and_log("multi-actor")
+        end)
+        |> Multi.run(:update_b, fn repo, _ ->
+          b |> Changeset.change(%{name: "seq-b-v2"}) |> repo.update_and_log("multi-actor")
+        end)
+
+      assert {:ok,
+              %{
+                update_a: %Resource{name: "seq-a-v2"},
+                update_b: %Resource{name: "seq-b-v2"}
+              }} = TestRepo.transaction(multi)
+
+      assert 2 ==
+               TestRepo.aggregate(
+                 from(c in Changelog, where: c.actor_id == "multi-actor"),
+                 :count
+               )
+    end
   end
 end
