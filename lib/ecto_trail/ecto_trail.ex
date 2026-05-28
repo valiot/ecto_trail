@@ -358,7 +358,7 @@ defmodule EctoTrail do
 
   defp log_changes_alone(
          repo,
-         %{operation: operation} = _multi_acc,
+         %{operation: operation} = multi_acc,
          _struct_or_changeset,
          changes,
          actor_id,
@@ -389,6 +389,14 @@ defmodule EctoTrail do
 
         {:ok, reason}
     end
+  rescue
+    error ->
+      Logger.error(
+        "Failed to store changes in audit log: #{inspect(multi_acc)} " <>
+          "by actor #{inspect(actor_id)}. Reason: #{inspect(error)}"
+      )
+
+      {:ok, error}
   end
 
   defp log_changes(repo, %{operation: operation} = _multi_acc, struct_or_changeset, actor_id, operation_type) do
@@ -430,6 +438,14 @@ defmodule EctoTrail do
 
         {:ok, reason}
     end
+  rescue
+    error ->
+      Logger.error(
+        "Failed to store changes in audit log: #{inspect(struct_or_changeset)} " <>
+          "by actor #{inspect(actor_id)}. Reason: #{inspect(error)}"
+      )
+
+      {:ok, error}
   end
 
   defp prepare_struct_or_changeset(%Changeset{data: data} = _changeset, :delete), do: data

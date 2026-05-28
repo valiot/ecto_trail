@@ -78,16 +78,23 @@ end
 # Start Postgrex
 {:ok, _pids} = Application.ensure_all_started(:postgrex)
 
-# Create DB
-_ = TestRepo.__adapter__().storage_up(TestRepo.config())
+if System.get_env("NO_DB_SETUP") do
+  IO.puts("NO_DB_SETUP set: skipping TestRepo start/migrate for agent env without postgres")
+else
+  # Create DB
+  _ = TestRepo.__adapter__().storage_up(TestRepo.config())
 
-# Start Repo
-{:ok, _pid} = TestRepo.start_link()
+  # Start Repo
+  {:ok, _pid} = TestRepo.start_link()
 
-# Migrate DB
-migrations_path = Path.join([:code.priv_dir(:ecto_trail), "repo", "migrations"])
-Ecto.Migrator.run(TestRepo, migrations_path, :up, all: true)
+  # Migrate DB
+  migrations_path = Path.join([:code.priv_dir(:ecto_trail), "repo", "migrations"])
+  Ecto.Migrator.run(TestRepo, migrations_path, :up, all: true)
+end
 
 # Start ExUnit
 ExUnit.start()
-Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
+
+unless System.get_env("NO_DB_SETUP") do
+  Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
+end
