@@ -2,6 +2,7 @@ defmodule EctoTrailTest do
   use EctoTrail.DataCase
   alias EctoTrail.Changelog
   alias Ecto.Changeset
+  alias Ecto.Multi
   doctest EctoTrail
 
   describe "insert_and_log/3" do
@@ -223,6 +224,47 @@ defmodule EctoTrailTest do
                resource: "resources",
                change_type: :upsert
              } = TestRepo.one(Changelog)
+    end
+  end
+
+  describe "use inside Ecto.Multi (prevents nested multi tx RuntimeError)" do
+    test "insert_and_log succeeds and logs when invoked from a Multi.run step" do
+      multi =
+        Multi.new()
+        |> Multi.run(:inserted, fn repo, _ ->
+          repo.insert_and_log(%Resource{name: "multi insert"}, "multi-actor")
+        end)
+
+      assert {:ok, %{inserted: %Resource{name: "multi insert"}}} = TestRepo.transaction(multi)
+
+      resource = TestRepo.one(from(r in Resource, where: r.name == "multi insert"))
+      resource_id = to_string(resource.id)
+
+      assert %{
+               changeset: %{},
+               actor_id: "multi-actor",
+               resource_id: ^resource_id,
+               resource: "resources",
+               change_type: :insert
+             } = TestRepo.one(Changelog)
+    end
+
+    test "update_and_log succeeds when invoked from within Multi" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "to-update"})
+
+      multi =
+        Multi.new()
+        |> Multi.run(:updated, fn repo, _ ->
+          res
+          |> Changeset.change(%{name: "updated-in-multi"})
+          |> repo.update_and_log("multi-actor")
+        end)
+
+      assert {:ok, %{updated: %Resource{name: "updated-in-multi"}}} = TestRepo.transaction(multi)
+
+      assert TestRepo.exists?(
+               from(c in Changelog, where: c.change_type == :update and c.actor_id == "multi-actor")
+             )
     end
   end
 end

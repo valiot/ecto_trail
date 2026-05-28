@@ -45,7 +45,6 @@ defmodule EctoTrail do
   5. Use logging functions instead of defaults. See `EctoTrail` module docs.
   """
   alias Ecto.Changeset
-  alias Ecto.Multi
   alias EctoTrail.Changelog
   require Logger
 
@@ -154,9 +153,17 @@ defmodule EctoTrail do
           action_type :: action_type()
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def log(repo, struct_or_changeset, changes, actor_id, action_type) do
-    Multi.new()
-    |> Multi.run(:operation, fn _, _ -> {:ok, struct_or_changeset} end)
-    |> run_logging_transaction_alone(repo, struct_or_changeset, changes, actor_id, action_type)
+    _ =
+      log_changes_alone(
+        repo,
+        %{operation: struct_or_changeset},
+        struct_or_changeset,
+        changes,
+        actor_id,
+        action_type
+      )
+
+    {:ok, struct_or_changeset}
   end
 
   @doc """
@@ -276,9 +283,19 @@ defmodule EctoTrail do
           opts :: Keyword.t()
         ) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def insert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
-    Multi.new()
-    |> Multi.insert(:operation, struct_or_changeset, opts)
-    |> run_logging_transaction(repo, struct_or_changeset, actor_id, :insert)
+    case repo.transaction(fn tx_repo ->
+           case tx_repo.insert(struct_or_changeset, opts) do
+             {:ok, operation} ->
+               log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :insert)
+               operation
+
+             {:error, reason} ->
+               tx_repo.rollback(reason)
+           end
+         end) do
+      {:error, reason} -> {:error, reason}
+      operation -> {:ok, operation}
+    end
   end
 
   @doc """
@@ -295,9 +312,19 @@ defmodule EctoTrail do
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
   def update_and_log(repo, changeset, actor_id, opts \\ []) do
-    Multi.new()
-    |> Multi.update(:operation, changeset, opts)
-    |> run_logging_transaction(repo, changeset, actor_id, :update)
+    case repo.transaction(fn tx_repo ->
+           case tx_repo.update(changeset, opts) do
+             {:ok, operation} ->
+               log_changes(tx_repo, %{operation: operation}, changeset, actor_id, :update)
+               operation
+
+             {:error, reason} ->
+               tx_repo.rollback(reason)
+           end
+         end) do
+      {:error, reason} -> {:error, reason}
+      operation -> {:ok, operation}
+    end
   end
 
   @doc """
@@ -314,9 +341,19 @@ defmodule EctoTrail do
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
   def upsert_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
-    Multi.new()
-    |> Multi.insert_or_update(:operation, struct_or_changeset, opts)
-    |> run_logging_transaction(repo, struct_or_changeset, actor_id, :upsert)
+    case repo.transaction(fn tx_repo ->
+           case tx_repo.insert_or_update(struct_or_changeset, opts) do
+             {:ok, operation} ->
+               log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :upsert)
+               operation
+
+             {:error, reason} ->
+               tx_repo.rollback(reason)
+           end
+         end) do
+      {:error, reason} -> {:error, reason}
+      operation -> {:ok, operation}
+    end
   end
 
   @doc """
@@ -331,30 +368,20 @@ defmodule EctoTrail do
           {:ok, Ecto.Schema.t()}
           | {:error, Ecto.Changeset.t()}
   def delete_and_log(repo, struct_or_changeset, actor_id, opts \\ []) do
-    Multi.new()
-    |> Multi.delete(:operation, struct_or_changeset, opts)
-    |> run_logging_transaction(repo, struct_or_changeset, actor_id, :delete)
-  end
+    case repo.transaction(fn tx_repo ->
+           case tx_repo.delete(struct_or_changeset, opts) do
+             {:ok, operation} ->
+               log_changes(tx_repo, %{operation: operation}, struct_or_changeset, actor_id, :delete)
+               operation
 
-  defp run_logging_transaction(multi, repo, struct_or_changeset, actor_id, operation_type) do
-    multi
-    |> Multi.run(:changelog, &log_changes(&1, &2, struct_or_changeset, actor_id, operation_type))
-    |> repo.transaction()
-    |> build_result()
+             {:error, reason} ->
+               tx_repo.rollback(reason)
+           end
+         end) do
+      {:error, reason} -> {:error, reason}
+      operation -> {:ok, operation}
+    end
   end
-
-  defp run_logging_transaction_alone(multi, repo, struct, changes, actor_id, operation_type) do
-    multi
-    |> Multi.run(
-      :changelog,
-      &log_changes_alone(&1, &2, struct, changes, actor_id, operation_type)
-    )
-    |> repo.transaction()
-    |> build_result()
-  end
-
-  defp build_result({:ok, %{operation: operation}}), do: {:ok, operation}
-  defp build_result({:error, :operation, reason, _changes_so_far}), do: {:error, reason}
 
   defp log_changes_alone(
          repo,
