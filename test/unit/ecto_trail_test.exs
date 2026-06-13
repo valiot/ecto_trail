@@ -198,6 +198,33 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise on duplicate audit log pkey constraint; main operation succeeds (soft-fails the log)",
+         %{schema: schema} do
+      %Changelog{}
+      |> Changeset.cast(
+        %{
+          id: 1,
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: "seed-1",
+          changeset: %{},
+          change_type: :insert
+        },
+        [:id, :actor_id, :resource, :resource_id, :changeset, :change_type]
+      )
+      |> TestRepo.insert!()
+
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', 1, false)")
+
+      result =
+        schema
+        |> Changeset.change(%{name: "after duplicate pkey"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      assert {:ok, %Resource{name: "after duplicate pkey"}} = result
+      assert TestRepo.aggregate(Changelog, :count) == 1
+    end
   end
 
   describe "upsert_and_log/3" do
