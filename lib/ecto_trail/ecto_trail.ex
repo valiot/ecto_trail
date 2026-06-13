@@ -29,6 +29,7 @@ defmodule EctoTrail do
             add :resource, :string, null: false
             add :resource_id, :string, null: false
             add :changeset, :map, null: false
+            add(:change_type, :change)
 
             timestamps([type: :utc_datetime, updated_at: false])
           end
@@ -53,7 +54,7 @@ defmodule EctoTrail do
   # Cache frequently accessed config to avoid repeated lookups
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
   @default_max_params 65_000
-  @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
+  @changelog_fields [:id, :actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
   defmacro __using__(_) do
@@ -565,13 +566,11 @@ defmodule EctoTrail do
   defp map_custom_ecto_type({_field, %Changeset{}} = input), do: input
   defp map_custom_ecto_type({field, %{__struct__: _} = value}), do: {field, inspect(value)}
 
-  defp map_custom_ecto_type({field, value}) when is_map(value) and is_map_key(value, :__struct__),
-    do: {field, inspect(value)}
-
   defp map_custom_ecto_type({field, value}) when is_map(value), do: {field, value}
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id)
   end
 end

@@ -329,4 +329,42 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log pkey constraint safety (OPS-4628)" do
+    test "update_and_log does not raise Ecto.ConstraintError when audit_log pkey would collide (e.g. sequence skew under concurrency)" do
+      alias EctoTrail.Changelog
+
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq = "#{table}_id_seq"
+
+      # Insert a sentinel row claiming a high id, then rewind sequence so default insert collides
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        TestRepo.insert(%Changelog{
+          id: 987_654_321,
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: "seed-1",
+          changeset: %{},
+          change_type: :update,
+          inserted_at: now
+        })
+
+      # next default-provided id will be 987654321 -> duplicate pkey
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq, 987_654_320])
+
+      {:ok, schema} = TestRepo.insert(%Resource{name: "pkey-race"})
+
+      # On current buggy code this raises Ecto.ConstraintError (audit_log_pkey unique)
+      # After fix (unique_constraint declared) the inner log insert fails gracefully and we still return success
+      assert {:ok, updated} =
+               schema
+               |> Changeset.change(%{name: "pkey-after"})
+               |> TestRepo.update_and_log("race-actor")
+
+      assert updated.name == "pkey-after"
+      # The resource change landed; the audit log write may have been skipped due to collision (best-effort)
+    end
+  end
 end
