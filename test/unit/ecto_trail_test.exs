@@ -198,6 +198,33 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "update_and_log does not raise on duplicate audit_log pkey constraint (main update succeeds)", %{
+      schema: schema
+    } do
+      # Seed one changelog row to obtain a concrete pkey value
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "v1"})
+        |> TestRepo.update_and_log("pkey-actor")
+
+      first_log = TestRepo.one(Changelog)
+      log_id = first_log.id
+
+      # Force the serial sequence to emit the same id on next insert -> pkey violation on "audit_log_pkey"
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1, false)", [log_id])
+
+      # Before the fix this raises Ecto.ConstraintError at log_changes/5 because no unique_constraint/3 was registered.
+      # After registering the pkey constraint, Ecto returns {:error, %Changeset{}} which log_changes swallows as {:ok, _}
+      # and the caller's transaction succeeds with the main update result.
+      result =
+        schema
+        |> Changeset.change(%{name: "v2"})
+        |> TestRepo.update_and_log("pkey-actor-2")
+
+      assert {:ok, %Resource{name: "v2"}} = result
+      assert TestRepo.aggregate(Changelog, :count) == 1
+    end
   end
 
   describe "upsert_and_log/3" do
