@@ -198,6 +198,42 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "swallows audit log pkey constraint error and commits the main update", %{schema: schema} do
+      blocker =
+        TestRepo.insert!(%Changelog{
+          actor_id: "blocker",
+          resource: "resources",
+          resource_id: "0",
+          changeset: %{},
+          change_type: :insert,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = table <> "_id_seq"
+
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1::regclass, $2::bigint)", [seq_name, blocker.id - 1])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          result =
+            schema
+            |> Changeset.change(%{name: "after pkey collision"})
+            |> TestRepo.update_and_log("cowboy")
+
+          assert {:ok, %Resource{name: "after pkey collision"}} = result
+        end)
+
+      assert log =~ "Failed to store changes in audit log"
+      assert log =~ "cowboy"
+
+      updated = TestRepo.get(Resource, schema.id)
+      assert updated.name == "after pkey collision"
+
+      cowboy_logs = TestRepo.all(from(c in Changelog, where: c.actor_id == "cowboy"))
+      assert cowboy_logs == []
+    end
   end
 
   describe "upsert_and_log/3" do
