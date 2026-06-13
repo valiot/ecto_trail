@@ -572,6 +572,13 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: pkey_constraint_name())
+  end
+
+  defp pkey_constraint_name do
+    table = Changelog.__schema__(:source)
+    "#{table}_pkey"
   end
 end

@@ -198,6 +198,40 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit_log pkey collision (swallows unique constraint violation)",
+         %{schema: schema} do
+      # Seed an audit log row, then rewind its table's id sequence so the *next* Changelog insert
+      # inside update_and_log will collide on the primary key. Before the fix this raises
+      # Ecto.ConstraintError; after the fix the unique_constraint declaration turns it into a
+      # changeset error which log_changes already gracefully turns into {:ok, reason} so the
+      # caller's write succeeds.
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      table = Changelog.__schema__(:source)
+
+      {:ok, seeded} =
+        TestRepo.insert(%Changelog{
+          actor_id: "seed-actor",
+          resource: "resources",
+          resource_id: "999999",
+          changeset: %{},
+          change_type: :insert,
+          inserted_at: now
+        })
+
+      occupied_id = seeded.id
+      seq = "#{table}_id_seq"
+
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1::regclass, $2, false)", [seq, occupied_id])
+
+      result =
+        schema
+        |> Changeset.change(%{name: "after-pkey-collision"})
+        |> TestRepo.update_and_log("colliding-actor")
+
+      assert {:ok, %Resource{name: "after-pkey-collision"}} = result
+      assert [%{name: "after-pkey-collision"}] = TestRepo.all(Resource)
+    end
   end
 
   describe "upsert_and_log/3" do
