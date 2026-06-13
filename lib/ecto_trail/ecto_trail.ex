@@ -56,6 +56,11 @@ defmodule EctoTrail do
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
+  defp pkey_constraint_name do
+    table = Application.get_env(:ecto_trail, :table_name, "audit_log") |> to_string()
+    "#{table}_pkey"
+  end
+
   defmacro __using__(_) do
     quote do
       @type action_type :: :insert | :update | :upsert | :delete
@@ -391,6 +396,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: pkey_constraint_name())
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
@@ -432,6 +438,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: pkey_constraint_name())
     |> repo.insert()
     |> case do
       {:ok, changelog} ->

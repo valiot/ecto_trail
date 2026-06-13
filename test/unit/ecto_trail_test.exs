@@ -198,6 +198,45 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "swallows audit_log pkey unique violation as non-fatal (no ConstraintError raised from update_and_log)",
+         %{schema: schema} do
+      # Seed one update log so sequence and table exist
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "seed-for-collision"})
+        |> TestRepo.update_and_log("seed-actor")
+
+      # Determine current max id and insert a colliding row at what will be the "next" value,
+      # then rewind the sequence so the audit log insert inside the next update_and_log collides on pkey.
+      max_id =
+        TestRepo.one(from(c in Changelog, select: max(c.id))) || 0
+
+      colliding_id = max_id + 1
+
+      # Insert a dummy audit row claiming the id that the sequence will hand out next.
+      # Table/sequence names come from test config: "audit_log"
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        "INSERT INTO audit_log (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) " <>
+          "VALUES ($1, 'dummy', 'resources', '0', $2::jsonb, 'update', now())",
+        [colliding_id, "{}"]
+      )
+
+      # Rewind sequence so DEFAULT next insert re-uses the colliding id
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, false)", [max_id])
+
+      # This call used to raise Ecto.ConstraintError("audit_log_pkey") from log_changes/5
+      result =
+        schema
+        |> Changeset.change(%{name: "post-collision"})
+        |> TestRepo.update_and_log("cowboy")
+
+      assert {:ok, %Resource{name: "post-collision"}} = result
+
+      # The main update happened; the audit log failure was swallowed (consistent with other error paths)
+      assert TestRepo.exists?(from(r in Resource, where: r.name == "post-collision"))
+    end
   end
 
   describe "upsert_and_log/3" do
