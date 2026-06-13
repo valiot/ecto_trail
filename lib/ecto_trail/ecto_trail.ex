@@ -52,6 +52,7 @@ defmodule EctoTrail do
 
   # Cache frequently accessed config to avoid repeated lookups
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
+  @audit_log_table Application.compile_env(:ecto_trail, :table_name, "audit_log")
   @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
@@ -424,6 +425,8 @@ defmodule EctoTrail do
     actor_id_str = to_actor_id_string(actor_id)
     resource_id_str = to_string(operation.id)
 
+    pkey_constraint = "#{@audit_log_table}_pkey"
+
     %{
       actor_id: actor_id_str,
       resource: resource,
@@ -432,6 +435,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: pkey_constraint)
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
