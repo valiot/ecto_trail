@@ -227,6 +227,45 @@ defmodule EctoTrailTest do
     end
   end
 
+  describe "audit log pkey constraint handling (OPS-4570)" do
+    test "upsert_and_log does not raise Ecto.ConstraintError when audit log insert hits pkey collision" do
+      # Seed at least one changelog row so the sequence exists.
+      TestRepo.insert!(%Changelog{
+        actor_id: "seed",
+        resource: "resources",
+        resource_id: "0",
+        changeset: %{},
+        change_type: :insert
+      })
+
+      # Advance the sequence by inserting one more changelog row directly.
+      {:ok, _} =
+        TestRepo.insert(%Changelog{
+          actor_id: "seed2",
+          resource: "resources",
+          resource_id: "0",
+          changeset: %{},
+          change_type: :insert
+        })
+
+      # Set the sequence back by one so the *next* insert (without explicit id) will reuse the last value -> pkey collision.
+      TestRepo.query!(
+        "SELECT setval('audit_log_id_seq', (SELECT last_value FROM audit_log_id_seq) - 1, true)"
+      )
+
+      # This upsert_and_log will:
+      # - succeed the user insert_or_update
+      # - then in the same tx, log_changes will do a bare repo.insert for the audit row
+      # - that insert will attempt to use a duplicate PK -> without unique_constraint handling it raises ConstraintError
+      result =
+        %Resource{}
+        |> Changeset.change(%{name: "collision-test"})
+        |> TestRepo.upsert_and_log("ops-4570-actor")
+
+      assert {:ok, %Resource{name: "collision-test"}} = result
+    end
+  end
+
   describe "use inside Ecto.Multi (prevents nested multi tx RuntimeError)" do
     test "insert_and_log succeeds and logs when invoked from a Multi.run step" do
       multi =

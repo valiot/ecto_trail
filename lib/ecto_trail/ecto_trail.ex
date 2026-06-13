@@ -52,8 +52,10 @@ defmodule EctoTrail do
 
   # Cache frequently accessed config to avoid repeated lookups
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
+  @audit_log_table_name Application.compile_env(:ecto_trail, :table_name, "audit_log") |> to_string()
+  @audit_log_pkey_name "#{@audit_log_table_name}_pkey"
   @default_max_params 65_000
-  @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
+  @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type, :id]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
   defmacro __using__(_) do
@@ -390,7 +392,9 @@ defmodule EctoTrail do
       changeset: changes,
       change_type: operation_type
     }
+    |> Map.merge(test_forced_audit_log_id())
     |> changelog_changeset()
+    |> add_audit_log_unique_constraints()
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
@@ -431,7 +435,9 @@ defmodule EctoTrail do
       changeset: changes,
       change_type: operation_type
     }
+    |> Map.merge(test_forced_audit_log_id())
     |> changelog_changeset()
+    |> add_audit_log_unique_constraints()
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
@@ -573,5 +579,20 @@ defmodule EctoTrail do
 
   defp changelog_changeset(attrs) do
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+  end
+
+  defp add_audit_log_unique_constraints(changeset) do
+    changeset
+    |> Changeset.unique_constraint(:id, name: @audit_log_pkey_name)
+  end
+
+  # Test seam: allows a test to force a specific PK on the next audit log row insert.
+  # Never used in prod; ignored when not set or not an integer.
+  defp test_forced_audit_log_id do
+    case Application.get_env(:ecto_trail, :test_force_audit_log_id) do
+      nil -> %{}
+      id when is_integer(id) -> %{id: id}
+      _ -> %{}
+    end
   end
 end
