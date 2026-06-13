@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `*_and_log/*` and `log/*` (via `log_changes/5`) no longer raise `Ecto.ConstraintError` on `audit_logs_pkey` / `audit_log_pkey` collisions; declare `unique_constraint(:id, name: <table>_pkey)` variants on the audit-log changeset and swallow violations. Upgraded benchee/credo (within ranges). Closes OPS-4588.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed

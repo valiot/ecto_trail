@@ -329,4 +329,49 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log pkey constraint handling" do
+    test "update_and_log absorbs audit_logs_pkey (or audit_log_pkey) violation instead of raising ConstraintError" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "pkey-collision-subject"})
+
+      high = 2_000_000_000
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, false)", [high])
+
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        "INSERT INTO \"audit_log\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())",
+        [high, "occupier", "resources", to_string(res.id), "{}", "insert"]
+      )
+
+      assert {:ok, updated} =
+               res
+               |> Changeset.change(%{name: "after-collision"})
+               |> TestRepo.update_and_log("collision-actor")
+
+      assert updated.name == "after-collision"
+
+      count = TestRepo.aggregate(from(c in Changelog, where: c.id == ^high), :count)
+      assert count == 1
+
+      assert TestRepo.aggregate(from(c in Changelog, where: c.actor_id == "collision-actor"), :count) == 0
+    end
+
+    test "log/5 absorbs pkey collision and does not raise" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "pkey-log-collision"})
+
+      high = 2_000_000_001
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, false)", [high])
+
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        "INSERT INTO \"audit_log\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())",
+        [high, "occupier2", "resources", to_string(res.id), "{}", "insert"]
+      )
+
+      assert {:ok, ^res} = TestRepo.log(res, %{"x" => 1}, "log-collider", :update)
+
+      count = TestRepo.aggregate(from(c in Changelog, where: c.id == ^high), :count)
+      assert count == 1
+    end
+  end
 end
