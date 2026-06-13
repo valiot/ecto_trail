@@ -198,6 +198,45 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "update_and_log does not raise on audit_log pkey collision (swallows log error); main update succeeds",
+         %{schema: schema} do
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{table}_id_seq"
+
+      # Seed an explicit row at a high id (will become the colliding pkey value)
+      # and rewind the sequence so the subsequent log_changes insert will attempt the same id.
+      colliding_id = 99_999_999
+
+      seed_cs =
+        %Changelog{}
+        |> Changeset.cast(
+          %{
+            id: colliding_id,
+            actor_id: "seed-collision",
+            resource: "resources",
+            resource_id: "0",
+            changeset: %{},
+            change_type: :insert,
+            inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+          },
+          [:id, :actor_id, :resource, :resource_id, :changeset, :change_type, :inserted_at]
+        )
+
+      TestRepo.insert!(seed_cs)
+      TestRepo.query!("SELECT setval($1::regclass, $2, false)", [seq_name, colliding_id - 1])
+
+      # Trigger the path under test: update succeeds, log insert hits pkey unique violation and must be swallowed.
+      result =
+        schema
+        |> Changeset.change(%{name: "post-collision"})
+        |> TestRepo.update_and_log("actor-after-collision")
+
+      assert {:ok, %Resource{name: "post-collision"}} = result
+
+      # The audit log entry for this actor must not exist (collision caused the insert to be treated as error and swallowed).
+      assert [] == TestRepo.all(from(c in Changelog, where: c.actor_id == "actor-after-collision"))
+    end
   end
 
   describe "upsert_and_log/3" do
