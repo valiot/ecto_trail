@@ -329,4 +329,13 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log primary key generation" do
+    test "insert_and_log produces a binary_id UUID for the changelog row" do
+      {:ok, _} = TestRepo.insert_and_log(%Resource{name: "id-gen"}, "actor")
+      log = TestRepo.one(Changelog)
+      assert is_binary(log.id)
+      assert byte_size(log.id) == 36
+    end
+  end
 end

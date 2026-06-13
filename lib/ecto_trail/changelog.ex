@@ -5,6 +5,7 @@ defmodule EctoTrail.Changelog do
   use Ecto.Schema
 
   @table_name Application.compile_env(:ecto_trail, :table_name, "audit_log")
+  @primary_key {:id, :binary_id, autogenerate: true}
   schema @table_name do
     field(:actor_id, :string)
     field(:resource, :string)

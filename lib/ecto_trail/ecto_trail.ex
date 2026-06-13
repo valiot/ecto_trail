@@ -572,6 +572,12 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id)
   end
+
+  # Test-only escape hatch so we can assert constraint registration without a DB.
+  @doc false
+  def __changelog_changeset__(attrs), do: changelog_changeset(attrs)
 end

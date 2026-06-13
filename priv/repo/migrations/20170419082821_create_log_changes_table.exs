@@ -6,7 +6,8 @@ defmodule EctoTrail.TestRepo.Migrations.CreateAuditLogTable do
 
   def change(table_name \\ @table_name) do
     EctoTrailChangeEnum.create_type
-    create table(table_name) do
+    create table(table_name, primary_key: false) do
+      add :id, :uuid, primary_key: true
       add :actor_id, :string, null: false
       add :resource, :string, null: false
       add :resource_id, :string, null: false
