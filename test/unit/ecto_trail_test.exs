@@ -198,6 +198,30 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit_log pkey violation and still succeeds (swallows audit failure)",
+         %{schema: schema} do
+      # First write produces one audit row and advances the sequence
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "first-update"})
+        |> TestRepo.update_and_log("constraint-actor")
+
+      # Force the serial sequence so the *next* audit insert will reuse an existing pkey value
+      # (simulates duplicate-PK scenarios seen in prod with custom uuid PKs or retry paths)
+      TestRepo.query!(
+        "SELECT setval(pg_get_serial_sequence('audit_log', 'id'), COALESCE((SELECT MAX(id) FROM audit_log), 0) - 1)"
+      )
+
+      # This call used to surface Ecto.ConstraintError out of log_changes/5 and abort the caller's tx
+      result =
+        schema
+        |> Changeset.change(%{name: "second-update-after-pkey-collision"})
+        |> TestRepo.update_and_log("constraint-actor-2")
+
+      assert {:ok, %Resource{name: "second-update-after-pkey-collision"}} = result
+      # The business update succeeded even though the audit log insert hit (and swallowed) the pkey constraint
+    end
   end
 
   describe "upsert_and_log/3" do
