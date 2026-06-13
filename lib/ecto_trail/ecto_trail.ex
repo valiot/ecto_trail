@@ -572,6 +572,13 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
+    # Declare the pkey unique constraint(s) so that a duplicate-key violation on insert
+    # becomes a changeset error instead of raising Ecto.ConstraintError and aborting
+    # the caller's outer transaction (see OPS-4586).
+    table = @table_name
+
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: "#{table}_pkey")
+    |> Changeset.unique_constraint(:id, name: "#{table}s_pkey")
   end
 end

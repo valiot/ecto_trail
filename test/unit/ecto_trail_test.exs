@@ -329,4 +329,89 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "handles audit log pkey unique constraint gracefully (no ConstraintError raised)" do
+    test "update_and_log succeeds and swallows log insert pkey violation when sequence yields duplicate id" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "pkey-collision"})
+
+      # Determine table/sequence names (support configured table_name)
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{table}_id_seq"
+
+      # Pick a high id unlikely to collide with other tests and force the sequence to return it next.
+      colliding_id = 987_654_321
+
+      # Ensure there is no row with that id yet, then set sequence so nextval returns it.
+      TestRepo.delete_all(from(c in Changelog, where: c.id == ^colliding_id))
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq_name, colliding_id])
+
+      # Seed a log row using that id (simulates concurrent/duplicate log attempt or app writing same id).
+      # Use insert_all to force the PK value.
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_attrs = %{
+        id: colliding_id,
+        actor_id: "collider",
+        resource: "resources",
+        resource_id: to_string(res.id),
+        changeset: %{},
+        change_type: :update,
+        inserted_at: now
+      }
+
+      {count, _} = TestRepo.insert_all(Changelog, [log_attrs])
+      assert count == 1
+
+      # Re-set the sequence again so that the upcoming library-driven insert will also draw the same id.
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq_name, colliding_id])
+
+      # Now exercise the path under test inside a transaction (mirrors the reported app usage).
+      # Before the fix this raises Ecto.ConstraintError on audit_log(s)_pkey.
+      result =
+        TestRepo.transaction(fn ->
+          res
+          |> Changeset.change(%{name: "after-collision"})
+          |> TestRepo.update_and_log("collider-actor")
+        end)
+
+      assert {:ok, %Resource{name: "after-collision"}} = result
+
+      # There should still be at least the seeded log row; the library may have failed to insert the duplicate (swallowed) or succeeded if sequence moved.
+      assert TestRepo.exists?(from(c in Changelog, where: c.id == ^colliding_id))
+    end
+
+    test "insert_and_log succeeds and swallows log insert pkey violation" do
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{table}_id_seq"
+      colliding_id = 987_654_322
+
+      TestRepo.delete_all(from(c in Changelog, where: c.id == ^colliding_id))
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq_name, colliding_id])
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {1, _} =
+        TestRepo.insert_all(Changelog, [
+          %{
+            id: colliding_id,
+            actor_id: "collider2",
+            resource: "resources",
+            resource_id: "999999",
+            changeset: %{},
+            change_type: :insert,
+            inserted_at: now
+          }
+        ])
+
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq_name, colliding_id])
+
+      result =
+        TestRepo.transaction(fn ->
+          TestRepo.insert_and_log(%Resource{name: "insert-after-collision"}, "collider2-actor")
+        end)
+
+      assert {:ok, %Resource{name: "insert-after-collision"}} = result
+      assert TestRepo.exists?(from(c in Changelog, where: c.id == ^colliding_id))
+    end
+  end
 end
