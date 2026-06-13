@@ -198,6 +198,32 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit log pkey collision; main op succeeds and failure is swallowed",
+         %{schema: schema} do
+      # First update_and_log creates one audit log row (with generated serial id)
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "first"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      # Capture the id that was just assigned to the log row and rewind its sequence
+      # so the *next* audit log insert inside update_and_log will collide on the pkey.
+      [%{id: last_log_id}] =
+        TestRepo.all(from(c in Changelog, where: c.actor_id == "pkey-collision-actor", select: %{id: c.id}))
+
+      # table in tests is "audit_log"; sequence is audit_log_id_seq (Postgres default for this migration)
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, false)", [last_log_id - 1])
+
+      # Second update_and_log will attempt to insert another audit log row; without unique_constraint
+      # on the changeset this produces Ecto.ConstraintError inside the tx and propagates out.
+      result =
+        schema
+        |> Changeset.change(%{name: "second"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      assert {:ok, %Resource{name: "second"}} = result
+    end
   end
 
   describe "upsert_and_log/3" do
