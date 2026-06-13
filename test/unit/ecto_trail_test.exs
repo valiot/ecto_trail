@@ -198,6 +198,35 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise on audit_log pkey unique violation; swallows as {:error, changeset} per design", %{
+      schema: schema
+    } do
+      # First update_and_log creates the initial Changelog row (consumes a PK)
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "first change"})
+        |> TestRepo.update_and_log("constraint-tester")
+
+      # Rewind the audit_log sequence so the next Changelog insert will collide on pkey
+      source = to_string(Changelog.__schema__(:source))
+      seq = "#{source}_id_seq"
+      TestRepo.query!("ALTER SEQUENCE \"#{seq}\" RESTART WITH 1")
+
+      # This would previously raise Ecto.ConstraintError("..._pkey") from inside log_changes.
+      # With unique_constraint declared on the changeset, the insert returns {:error, cs}
+      # which the existing error path logs and turns into {:ok, reason} (non-fatal for caller).
+      result =
+        schema
+        |> Changeset.change(%{name: "second change"})
+        |> TestRepo.update_and_log("constraint-tester")
+
+      assert {:ok, %Resource{name: "second change"}} = result
+      assert %{name: "second change"} = TestRepo.get(Resource, schema.id)
+
+      # Only the first log succeeded; the colliding one was turned into a non-raised error
+      assert TestRepo.aggregate(Changelog, :count, :id) == 1
+    end
   end
 
   describe "upsert_and_log/3" do
