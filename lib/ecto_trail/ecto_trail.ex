@@ -390,6 +390,7 @@ defmodule EctoTrail do
       changeset: changes,
       change_type: operation_type
     }
+    |> changelog_changeset()
     |> insert_changelog(repo)
   end
 

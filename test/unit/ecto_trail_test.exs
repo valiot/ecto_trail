@@ -363,4 +363,31 @@ defmodule EctoTrailTest do
       assert TestRepo.get(Resource, schema.id).name == "updated-despite-audit-collision"
     end
   end
+
+  describe "log/4 (public, non-transactional)" do
+    test "logs without raising and returns {:ok, struct} even on audit collision" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "log-direct"})
+
+      # Seed a colliding id for the next audit row.
+      TestRepo.insert!(%Changelog{
+        actor_id: "log-direct-seed",
+        resource: "resources",
+        resource_id: to_string(schema.id),
+        changeset: %{},
+        change_type: :insert,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+      seed =
+        TestRepo.one(
+          from(c in Changelog, where: c.actor_id == "log-direct-seed", order_by: [desc: c.id], limit: 1)
+        )
+
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1, false)", [seed.id - 1])
+
+      # Public log/4 path (exercises log_changes_alone) must not raise; it returns {:ok, input}.
+      result = TestRepo.log(schema, %{"name" => "log-direct"}, "log-direct-actor", :insert)
+      assert {:ok, ^schema} = result
+    end
+  end
 end
