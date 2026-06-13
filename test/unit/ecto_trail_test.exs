@@ -329,4 +329,37 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "unique pkey constraint on audit_log (OPS-4576)" do
+    test "pkey collision on audit_log does not raise Ecto.ConstraintError; logging is best-effort and does not break the caller's tx" do
+      # First operation creates the initial audit_log row (consumes the next serial PK value)
+      assert {:ok, _first} =
+               TestRepo.insert_and_log(%Resource{name: "first-for-pkey"}, "pkey-collision-actor")
+
+      # Force the sequence so the *next* audit_log insert will collide on the pkey.
+      # The repo migration uses default bigserial PK for the audit table -> sequence name is <table>_id_seq.
+      Ecto.Adapters.SQL.query!(TestRepo, "ALTER SEQUENCE audit_log_id_seq RESTART WITH 1;")
+
+      # This update_and_log will internally call log_changes -> repo.insert for the changelog row.
+      # Before the fix this raises Ecto.ConstraintError (exactly as in the reported stack).
+      # After the fix the unique_constraint declaration (or defensive rescue) turns it into a soft error;
+      # the caller's transaction still commits successfully.
+      result =
+        TestRepo.transaction(fn ->
+          {:ok, res} = TestRepo.insert(%Resource{name: "second-for-pkey"})
+
+          res
+          |> Changeset.change(%{name: "second-updated-under-collision"})
+          |> TestRepo.update_and_log("pkey-collision-actor")
+        end)
+
+      assert {:ok, %Resource{name: "second-updated-under-collision"}} = result
+
+      # At least one log for the actor must exist (the first one); the colliding log attempt must not have crashed the tx.
+      assert TestRepo.aggregate(
+               from(c in Changelog, where: c.actor_id == "pkey-collision-actor"),
+               :count
+             ) >= 1
+    end
+  end
 end
