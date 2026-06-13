@@ -564,14 +564,12 @@ defmodule EctoTrail do
 
   defp map_custom_ecto_type({_field, %Changeset{}} = input), do: input
   defp map_custom_ecto_type({field, %{__struct__: _} = value}), do: {field, inspect(value)}
-
-  defp map_custom_ecto_type({field, value}) when is_map(value) and is_map_key(value, :__struct__),
-    do: {field, inspect(value)}
-
   defp map_custom_ecto_type({field, value}) when is_map(value), do: {field, value}
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: "audit_log_pkey")
+    |> Changeset.unique_constraint(:id, name: "audit_logs_pkey")
   end
 end

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `*_and_log/*` and `log/*` no longer raise `Ecto.ConstraintError` on `audit_log_pkey`/`audit_logs_pkey` when the audit log primary key collides (e.g. sequence reset or manual id claim). `changelog_changeset/1` now declares `unique_constraint` for both common pkey names so the log failure becomes a best-effort error instead of aborting the caller's transaction. Closes OPS-4602.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed

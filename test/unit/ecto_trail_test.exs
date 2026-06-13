@@ -329,4 +329,37 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "pkey unique constraint on audit log (OPS-4602)" do
+    test "update_and_log succeeds (best-effort log) even if audit log insert hits pkey unique violation" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "name-for-pkey-test"})
+      # Pre-claim a high PK in the audit_log table and force sequence to collide on next insert
+      high_id = 2_000_000
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        TestRepo.insert(%Changelog{
+          id: high_id,
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: to_string(schema.id),
+          changeset: %{},
+          change_type: :update,
+          inserted_at: now
+        })
+
+      # Make the next generated id collide with the one we claimed
+      _ = TestRepo.query!("SELECT setval('audit_log_id_seq', $1, true)", [high_id])
+
+      # Before the fix this raises Ecto.ConstraintError (audit_log_pkey / audit_logs_pkey)
+      # and aborts the caller's tx. After fix, log is best-effort and user op succeeds.
+      result =
+        schema
+        |> Changeset.change(%{name: "name2"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      assert {:ok, %Resource{name: "name2"}} = result
+      assert TestRepo.get(Changelog, high_id)
+    end
+  end
 end
