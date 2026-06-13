@@ -55,6 +55,8 @@ defmodule EctoTrail do
   @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
+  @table_name Application.compile_env(:ecto_trail, :table_name, "audit_log")
+  @pkey_constraint_name "#{@table_name}_pkey"
 
   defmacro __using__(_) do
     quote do
@@ -390,8 +392,7 @@ defmodule EctoTrail do
       changeset: changes,
       change_type: operation_type
     }
-    |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog(repo)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -431,8 +432,7 @@ defmodule EctoTrail do
       changeset: changes,
       change_type: operation_type
     }
-    |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog(repo)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -573,5 +573,12 @@ defmodule EctoTrail do
 
   defp changelog_changeset(attrs) do
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+  end
+
+  defp insert_changelog(attrs, repo) do
+    attrs
+    |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: @pkey_constraint_name)
+    |> repo.insert()
   end
 end

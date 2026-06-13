@@ -198,6 +198,38 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "swallows unique pkey constraint error on audit log insert and still succeeds (OPS-4584)", %{
+      schema: schema
+    } do
+      # Perform one update_and_log so a Changelog row exists (with an auto-generated id)
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "first update"})
+        |> TestRepo.update_and_log("cowboy")
+
+      # Capture the most recent changelog id
+      changelog = TestRepo.one(from(c in Changelog, order_by: [desc: c.id], limit: 1))
+      changelog_id = changelog.id
+
+      # Force the *next* audit_log insert to collide on the pkey by rewinding the sequence
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{table}_id_seq"
+      Ecto.Adapters.SQL.query!(TestRepo, "ALTER SEQUENCE #{seq_name} RESTART WITH #{changelog_id}")
+
+      # This update_and_log will attempt to insert a duplicate-pkey Changelog row inside its tx
+      result =
+        TestRepo.get(Resource, schema.id)
+        |> Changeset.change(%{name: "second update after seq reset"})
+        |> TestRepo.update_and_log("cowboy")
+
+      # The primary operation must succeed; the audit log failure is swallowed (non-fatal)
+      assert {:ok, %Resource{name: "second update after seq reset"}} = result
+
+      # No additional Changelog row was created by the colliding attempt
+      # (setup insert + the "first update" above => 2 total)
+      assert TestRepo.aggregate(Changelog, :count, :id) == 2
+    end
   end
 
   describe "upsert_and_log/3" do
