@@ -329,4 +329,40 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log pkey unique constraint handling (OPS-4597)" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "name-for-pkey-test"})
+      {:ok, %{schema: schema}}
+    end
+
+    test "update_and_log does not raise Ecto.ConstraintError on audit_log pkey collision (swallows, logs, succeeds)",
+         %{
+           schema: schema
+         } do
+      # Force the next generated id for the audit_log table to collide.
+      # Without unique_constraint/3 in changelog_changeset/1, repo.insert/1 inside
+      # log_changes/5 (and log_changes_alone) raises Ecto.ConstraintError for "table_pkey".
+      TestRepo.query!("SELECT setval(pg_get_serial_sequence('audit_log', 'id'), 1, false)")
+
+      # Occupy id=1 so the audit insert from log_changes will hit the PK unique constraint.
+      TestRepo.query!(
+        "INSERT INTO audit_log (actor_id, resource, resource_id, changeset, change_type, inserted_at) " <>
+          "VALUES ('seed','resources','0','{}','insert', now())"
+      )
+
+      # BEFORE the fix this raised Ecto.ConstraintError from inside the tx function (log_changes:435).
+      # AFTER the fix (unique_constraint on the dynamic "<table>_pkey") it returns {:ok, resource}
+      # and the audit failure is logged+swallowed so the caller's tx is not aborted.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %Resource{name: "after-collision"}} =
+                   schema
+                   |> Changeset.change(%{name: "after-collision"})
+                   |> TestRepo.update_and_log("pkey-collision-actor")
+        end)
+
+      assert log =~ "Failed to store changes in audit log"
+    end
+  end
 end

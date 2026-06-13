@@ -56,6 +56,12 @@ defmodule EctoTrail do
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
+  # Table + pkey constraint names are configurable (see Changelog and migration docs).
+  # We declare the unique_constraint by name so that duplicate pkey inserts return
+  # changeset errors instead of raising Ecto.ConstraintError (OPS-4597).
+  @audit_log_table Application.compile_env(:ecto_trail, :table_name, "audit_log")
+  @audit_log_pkey "#{@audit_log_table}_pkey"
+
   defmacro __using__(_) do
     quote do
       @type action_type :: :insert | :update | :upsert | :delete
@@ -565,13 +571,11 @@ defmodule EctoTrail do
   defp map_custom_ecto_type({_field, %Changeset{}} = input), do: input
   defp map_custom_ecto_type({field, %{__struct__: _} = value}), do: {field, inspect(value)}
 
-  defp map_custom_ecto_type({field, value}) when is_map(value) and is_map_key(value, :__struct__),
-    do: {field, inspect(value)}
-
   defp map_custom_ecto_type({field, value}) when is_map(value), do: {field, value}
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: @audit_log_pkey)
   end
 end
