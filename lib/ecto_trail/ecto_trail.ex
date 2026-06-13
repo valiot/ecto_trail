@@ -391,6 +391,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: audit_log_pkey_name())
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
@@ -432,6 +433,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: audit_log_pkey_name())
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
@@ -573,5 +575,10 @@ defmodule EctoTrail do
 
   defp changelog_changeset(attrs) do
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+  end
+
+  defp audit_log_pkey_name do
+    table = Application.get_env(:ecto_trail, :table_name, "audit_log") |> to_string()
+    "#{table}_pkey"
   end
 end

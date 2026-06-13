@@ -198,6 +198,33 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError when audit_log pkey is violated; swallows instead", %{
+      schema: schema
+    } do
+      high_id = 9_000_000_000 + System.unique_integer([:positive])
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq = "#{table}_id_seq"
+
+      dummy = %Changelog{
+        id: high_id,
+        actor_id: "constraint-tester",
+        resource: "resources",
+        resource_id: "1",
+        changeset: %{},
+        change_type: :insert
+      }
+
+      TestRepo.insert!(dummy)
+      Ecto.Adapters.SQL.query!(TestRepo, "ALTER SEQUENCE #{seq} RESTART WITH #{high_id}")
+
+      result =
+        schema
+        |> Changeset.change(%{name: "after-pkey-collision"})
+        |> TestRepo.update_and_log("constraint-tester")
+
+      assert {:ok, %Resource{name: "after-pkey-collision"}} = result
+    end
   end
 
   describe "upsert_and_log/3" do
