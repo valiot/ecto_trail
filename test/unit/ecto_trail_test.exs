@@ -328,5 +328,34 @@ defmodule EctoTrailTest do
                  :count
                )
     end
+
+    test "update_and_log (and log_changes) does not raise Ecto.ConstraintError on audit_log pkey conflict" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "pkey-collision"})
+
+      # First update_and_log writes one audit row (id allocated by sequence)
+      {:ok, _} =
+        res
+        |> Changeset.change(%{name: "pkey-collision-v1"})
+        |> TestRepo.update_and_log("pkey-actor")
+
+      # Rewind the sequence so the *next* Changelog insert will propose a colliding pkey
+      log =
+        TestRepo.one(
+          from(c in Changelog,
+            where: c.actor_id == "pkey-actor",
+            order_by: [desc: c.id],
+            limit: 1
+          )
+        )
+
+      TestRepo.query!("SELECT setval(pg_get_serial_sequence('audit_log','id'), $1, true)", [log.id])
+
+      # Before the fix this raises at lib/ecto_trail/ecto_trail.ex:435 in log_changes/5:
+      # ** (Ecto.ConstraintError) constraint error when attempting to insert struct: "audit_log_pkey" (unique_constraint)
+      assert {:ok, %Resource{name: "pkey-collision-v2"}} =
+               res
+               |> Changeset.change(%{name: "pkey-collision-v2"})
+               |> TestRepo.update_and_log("pkey-actor")
+    end
   end
 end

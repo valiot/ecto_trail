@@ -53,7 +53,7 @@ defmodule EctoTrail do
   # Cache frequently accessed config to avoid repeated lookups
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
   @default_max_params 65_000
-  @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
+  @changelog_fields [:id, :actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
   defmacro __using__(_) do
@@ -391,7 +391,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> repo.insert(on_conflict: :nothing, conflict_target: [:id])
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -432,7 +432,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> repo.insert(on_conflict: :nothing, conflict_target: [:id])
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -572,6 +572,10 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: "audit_log_pkey")
+    |> Changeset.unique_constraint(:id, name: "audit_logs_pkey")
+    |> Changeset.unique_constraint(:id)
   end
 end
