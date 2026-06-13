@@ -54,6 +54,8 @@ defmodule EctoTrail do
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
   @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
+  @table_name Application.compile_env(:ecto_trail, :table_name, "audit_log")
+  @pkey_constraint "#{@table_name}_pkey"
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
   defmacro __using__(_) do
@@ -572,6 +574,8 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: @pkey_constraint)
   end
 end
