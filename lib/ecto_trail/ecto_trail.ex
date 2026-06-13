@@ -53,8 +53,16 @@ defmodule EctoTrail do
   # Cache frequently accessed config to avoid repeated lookups
   @redacted_fields_config Application.compile_env(:ecto_trail, :redacted_fields, nil)
   @default_max_params 65_000
-  @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
+  @changelog_fields [:id, :actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
+
+  # Capture the audit log table name at compile time (supports string or atom config)
+  # and compute the conventional pkey constraint name so we can declare unique_constraint/3.
+  # This turns Ecto.ConstraintError (e.g. audit_log_pkey collisions from sequence skew,
+  # concurrent writers, or explicit id reuse) into a normal changeset error inside the
+  # caller's transaction instead of letting it escape (see log_changes/5, update_and_log etc).
+  @audit_log_table Application.compile_env(:ecto_trail, :table_name, "audit_log") |> to_string()
+  @audit_log_pkey_name "#{@audit_log_table}_pkey"
 
   defmacro __using__(_) do
     quote do
@@ -572,6 +580,8 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: @audit_log_pkey_name)
   end
 end

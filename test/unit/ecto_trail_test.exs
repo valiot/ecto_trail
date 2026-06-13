@@ -198,6 +198,46 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit_log pkey collision (unique_constraint declared)" do
+      # Seed a resource to update
+      {:ok, schema} = TestRepo.insert(%Resource{name: "pkey-collision-target"})
+
+      # Force a primary key collision on the audit_log table's serial id.
+      # Insert a Changelog row at a high id, then set the sequence so the next
+      # generated id from DEFAULT will collide with it.
+      high_id = 2_000_000
+
+      alias EctoTrail.Changelog
+
+      {:ok, _} =
+        %Changelog{
+          id: high_id,
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: "0",
+          changeset: %{},
+          change_type: :insert,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        }
+        |> TestRepo.insert()
+
+      # Reset sequence so nextval('audit_log_id_seq') returns high_id
+      # (setval with true means "is called" semantics; next nextval will be high_id)
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, true)", [high_id - 1])
+
+      # This update_and_log will internally call log_changes -> repo.insert(%Changelog{})
+      # which will attempt to use a pkey that already exists -> would raise ConstraintError
+      # unless changelog_changeset declares unique_constraint(:id, name: "audit_log_pkey").
+      result =
+        schema
+        |> Changeset.change(%{name: "after-pkey-collision"})
+        |> TestRepo.update_and_log("collision-actor")
+
+      # Design: audit log write failures are swallowed; main op succeeds.
+      assert {:ok, %Resource{name: "after-pkey-collision"}} = result
+      assert TestRepo.exists?(from(r in Resource, where: r.name == "after-pkey-collision"))
+    end
   end
 
   describe "upsert_and_log/3" do
