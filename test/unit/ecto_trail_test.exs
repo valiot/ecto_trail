@@ -198,6 +198,40 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit log unique/pkey violation; swallows like other audit write errors" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "c1"})
+
+      # Add a unique constraint on (resource, resource_id, change_type) to simulate
+      # a pkey or idempotency constraint that the internal changelog_changeset does not declare.
+      # This will cause repo.insert/1 inside log_changes to raise Ecto.ConstraintError
+      # (the exact failure mode reported in OPS-4565) unless we handle it.
+      TestRepo.query!("""
+      ALTER TABLE audit_log
+      ADD CONSTRAINT audit_log_res_resid_type_unique UNIQUE (resource, resource_id, change_type)
+      """)
+
+      on_exit(fn ->
+        TestRepo.query!("ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_res_resid_type_unique")
+      end)
+
+      # First update_and_log succeeds and writes one audit row.
+      {:ok, _updated1} =
+        schema
+        |> Changeset.change(%{name: "first"})
+        |> TestRepo.update_and_log("constraint-actor")
+
+      # Second update_and_log for the *same* resource+change_type will attempt a second
+      # audit insert that violates the unique constraint we added.
+      result =
+        TestRepo.get!(Resource, schema.id)
+        |> Changeset.change(%{name: "second"})
+        |> TestRepo.update_and_log("constraint-actor")
+
+      # Current contract: audit log write failures are logged and swallowed so the
+      # caller's transaction (here the implicit one inside update_and_log) is not aborted.
+      assert {:ok, %Resource{name: "second"}} = result
+    end
   end
 
   describe "upsert_and_log/3" do

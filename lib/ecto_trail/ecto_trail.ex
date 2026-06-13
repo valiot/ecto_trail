@@ -55,6 +55,7 @@ defmodule EctoTrail do
   @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
+  @audit_log_table Application.compile_env(:ecto_trail, :table_name, "audit_log")
 
   defmacro __using__(_) do
     quote do
@@ -391,7 +392,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog_protected(repo)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -432,7 +433,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog_protected(repo)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -572,6 +573,21 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    table = @audit_log_table
+
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: "#{table}_pkey")
+  end
+
+  # Thin wrapper that turns *raised* DB errors (ConstraintError etc.) into {:error, e}
+  # so callers can uniformly log+swallow audit write failures without letting them
+  # abort the outer *_and_log transaction (see OPS-4565).
+  defp insert_changelog_protected(changeset, repo) do
+    try do
+      repo.insert(changeset)
+    rescue
+      error -> {:error, error}
+    end
   end
 end
