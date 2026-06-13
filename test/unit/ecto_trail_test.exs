@@ -329,4 +329,37 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log pkey constraint handling (OPS-4595)" do
+    test "update_and_log does not raise Ecto.ConstraintError when audit log pkey collides; audit write fails gracefully" do
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq = "#{table}_id_seq"
+
+      # Seed one logged update so the audit_log table has at least one row and sequence is advanced
+      {:ok, res} = TestRepo.insert(%Resource{name: "seed"})
+
+      {:ok, _} =
+        res
+        |> Changeset.change(%{name: "seed-v2"})
+        |> TestRepo.update_and_log("seed-actor")
+
+      # Force the sequence to emit a pkey value that already exists (collision on next insert)
+      %{rows: [[max_id]]} = Ecto.Adapters.SQL.query!(TestRepo, ~s{SELECT MAX(id) FROM "#{table}"})
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1::regclass, $2, false)", [seq, max_id])
+
+      # This update_and_log triggers log_changes -> repo.insert for the Changelog.
+      # Before the fix: the insert raises Ecto.ConstraintError on "<table>_pkey".
+      # After the fix: unique_constraint declaration lets Ecto map it to a changeset error;
+      # the existing error path in log_changes logs it and returns {:ok, reason}, so the
+      # outer update_and_log still succeeds (audit failure remains non-fatal).
+      {:ok, res2} = TestRepo.insert(%Resource{name: "victim"})
+
+      result =
+        res2
+        |> Changeset.change(%{name: "victim-v2"})
+        |> TestRepo.update_and_log("victim-actor")
+
+      assert {:ok, %Resource{name: "victim-v2"}} = result
+    end
+  end
 end
