@@ -329,4 +329,23 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log primary key constraint handling" do
+    test "does not raise Ecto.ConstraintError when audit log pkey is violated; main operation succeeds and log failure is swallowed" do
+      {:ok, _} = TestRepo.insert_and_log(%Resource{name: "seed"}, "actor-seed")
+
+      %Postgrex.Result{rows: [[max_id]]} = TestRepo.query!("SELECT max(id) FROM audit_log")
+      next_id = max_id + 1
+
+      TestRepo.query!(
+        "INSERT INTO audit_log (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES ($1, 'conflict', 'resources', '999', $2, 'insert', now())",
+        [next_id, %{}]
+      )
+
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1, false)", [max_id])
+
+      assert {:ok, %Resource{name: "after"}} =
+               TestRepo.insert_and_log(%Resource{name: "after"}, "actor-after")
+    end
+  end
 end
