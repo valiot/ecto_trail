@@ -55,6 +55,7 @@ defmodule EctoTrail do
   @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
+  @audit_table_name Application.compile_env(:ecto_trail, :table_name, "audit_log")
 
   defmacro __using__(_) do
     quote do
@@ -572,6 +573,15 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: "#{@audit_table_name}_pkey")
+  end
+
+  # Test-only helper to exercise the exact same changeset builder used by log_changes.
+  # Allows tests to force pkey collisions (audit_logs_pkey) to verify we declare the constraint.
+  if Mix.env() == :test do
+    @doc false
+    def __test_changelog_changeset__(attrs), do: changelog_changeset(attrs)
   end
 end
