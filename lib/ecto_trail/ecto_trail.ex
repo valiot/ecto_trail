@@ -583,7 +583,7 @@ defmodule EctoTrail do
   # and do not duplicate the row. The unique_constraint/3 declaration ensures that
   # any violation is returned as a changeset error instead of a raised exception;
   # on_conflict makes the common duplicate-pkey case a successful no-op.
-  defp insert_changelog(repo, changeset) do
+  defp insert_changelog(changeset, repo) do
     table = Application.get_env(:ecto_trail, :table_name, "audit_log") |> to_string()
     pkey = "#{table}_pkey"
     repo.insert(changeset, on_conflict: :nothing, conflict_target: {:constraint, pkey})
