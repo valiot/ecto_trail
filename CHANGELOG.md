@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `*_and_log/*` and `log/*` no longer raise `Ecto.ConstraintError` (or let the caller's transaction roll back) when the audit log insert hits a pkey unique violation on "audit_logs_pkey" (or equivalent table). The violation is now declared via `unique_constraint/3` and swallowed (with logging) so the caller's work succeeds. Closes OPS-4612.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed

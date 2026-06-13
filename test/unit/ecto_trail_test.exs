@@ -198,6 +198,51 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise or rollback tx on audit log pkey unique violation (update_and_log)", %{
+      schema: schema
+    } do
+      # Arrange: force the next audit_log id (serial) to collide with a pre-seeded row.
+      seq_name = "audit_log_id_seq"
+
+      # Allocate the next id from the sequence and then set the sequence back so the *next* insert gets that value.
+      %{rows: [[next_id]]} =
+        Ecto.Adapters.SQL.query!(TestRepo, "SELECT nextval($1::regclass)", [seq_name])
+
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1::regclass, $2, false)", [seq_name, next_id - 1])
+
+      # Seed a conflicting audit row with that id; the subsequent log insert inside update_and_log will hit pkey.
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      %Changelog{}
+      |> Changeset.cast(
+        %{
+          id: next_id,
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: to_string(schema.id),
+          changeset: %{},
+          change_type: :update,
+          inserted_at: now
+        },
+        [:id, :actor_id, :resource, :resource_id, :changeset, :change_type, :inserted_at]
+      )
+      |> TestRepo.insert!()
+
+      # Act: the business update must succeed even though the audit log insert will get a pkey violation.
+      result =
+        schema
+        |> Changeset.change(%{name: "after-collision"})
+        |> TestRepo.update_and_log("collision-actor")
+
+      assert {:ok, %Resource{name: "after-collision"}} = result
+
+      # The original resource row is committed.
+      assert [%{name: "after-collision"}] = TestRepo.all(Resource)
+
+      # We do not assert on the exact number of Changelog rows (the colliding insert may or may not have been skipped),
+      # but we must not have a raised ConstraintError that rolled back the caller's tx.
+    end
   end
 
   describe "upsert_and_log/3" do

@@ -14,4 +14,7 @@ defmodule EctoTrail.Changelog do
 
     timestamps(type: :utc_datetime, updated_at: false)
   end
+
+  @doc false
+  def table_name, do: @table_name
 end
