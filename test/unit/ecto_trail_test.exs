@@ -328,5 +328,39 @@ defmodule EctoTrailTest do
                  :count
                )
     end
+
+    test "update_and_log succeeds and commits business change even when audit log insert raises on pkey unique violation" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "name-for-collision"})
+
+      # Seed one audit log row via the public path so it gets a generated PK id.
+      TestRepo.insert!(%Changelog{
+        actor_id: "seed-collision",
+        resource: "resources",
+        resource_id: to_string(schema.id),
+        changeset: %{},
+        change_type: :update,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+      seed =
+        TestRepo.one(
+          from(c in Changelog, where: c.actor_id == "seed-collision", order_by: [desc: c.id], limit: 1)
+        )
+
+      seed_id = seed.id
+
+      # Rewind the sequence so the *next* audit insert (from update_and_log) will be assigned the same id -> pkey collision.
+      # This forces the exact ConstraintError path seen in OPS-4572 inside the library's log_changes.
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1, false)", [seed_id - 1])
+
+      # Call under test: the log_changes inside will hit duplicate pkey on insert and must not rollback the tx.
+      result =
+        schema
+        |> Changeset.change(%{name: "updated-despite-audit-collision"})
+        |> TestRepo.update_and_log("collision-actor")
+
+      assert {:ok, %Resource{name: "updated-despite-audit-collision"}} = result
+      assert TestRepo.get(Resource, schema.id).name == "updated-despite-audit-collision"
+    end
   end
 end
