@@ -198,6 +198,50 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit_log pkey collision (unique_constraint declared on id)",
+         %{schema: schema} do
+      # First update_and_log inserts one Changelog row and advances the sequence.
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "first"})
+        |> TestRepo.update_and_log("collision-actor")
+
+      # Determine the id that was assigned to the audit row we just wrote (still visible in this tx).
+      audit_table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{audit_table}_id_seq"
+
+      %{id: used_id} =
+        TestRepo.one(
+          from(c in Changelog,
+            where: c.actor_id == "collision-actor",
+            select: %{id: c.id},
+            order_by: [desc: c.id],
+            limit: 1
+          )
+        )
+
+      # Rewind the sequence so the *next* audit insert will receive a colliding pkey value via nextval().
+      TestRepo.query!("ALTER SEQUENCE #{seq_name} RESTART WITH #{used_id}")
+
+      # This would previously raise:
+      # ** (Ecto.ConstraintError) constraint error when attempting to insert struct:
+      #     * "audit_log_pkey" (unique_constraint)
+      # coming from log_changes/5 -> repo.insert on the audit row inside update_and_log's tx.
+      result =
+        schema
+        |> Changeset.change(%{name: "second"})
+        |> TestRepo.update_and_log("collision-actor")
+
+      # Main user operation still succeeds (audit log failure is best-effort and must not roll back the tx).
+      assert {:ok, %Resource{name: "second"}} = result
+
+      # Only the first audit row exists; the colliding insert was translated to a changeset error and swallowed.
+      assert TestRepo.aggregate(
+               from(c in Changelog, where: c.actor_id == "collision-actor"),
+               :count
+             ) == 1
+    end
   end
 
   describe "upsert_and_log/3" do
