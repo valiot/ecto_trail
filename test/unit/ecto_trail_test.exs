@@ -198,6 +198,32 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit_log pkey collision (sequence skew or replay); swallows like other audit failures" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "collision-seed"})
+
+      # Seed a row claiming a high explicit id in the audit_log table (serial PK).
+      # Then set the sequence so the *next* insert will attempt the same id, causing a pkey violation.
+      TestRepo.query!(
+        "INSERT INTO audit_log (id, actor_id, resource, resource_id, changeset, change_type, inserted_at)
+                       VALUES (987654321, 'seed', 'resources', '0', '{}', 'insert', now())"
+      )
+
+      TestRepo.query!("SELECT setval('audit_log_id_seq', 987654320, true)")
+
+      # This calls into log_changes/5 -> repo.insert() of a Changelog changeset that has no unique_constraint/3 declared for the pkey.
+      # Before the fix: Ecto raises Ecto.ConstraintError for "audit_log_pkey" (unique_constraint) exactly as reported in OPS-4627.
+      # The caller's outer transaction sees the exception and the business update is lost (or the whole tx aborts).
+      result =
+        schema
+        |> Changeset.change(%{name: "updated-under-collision"})
+        |> TestRepo.update_and_log("actor-collision")
+
+      # After fix: the unique_constraint declaration lets Ecto turn the violation into a changeset error;
+      # the existing log_changes error handling logs it and returns {:ok, reason} (swallow), so the update succeeds.
+      assert {:ok, %Resource{name: "updated-under-collision"}} = result
+      assert %{name: "updated-under-collision"} = TestRepo.get(Resource, schema.id)
+    end
   end
 
   describe "upsert_and_log/3" do
