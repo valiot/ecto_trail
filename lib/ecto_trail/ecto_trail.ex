@@ -391,7 +391,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog(repo)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -432,7 +432,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog(repo)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -572,6 +572,20 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
+    table = Application.get_env(:ecto_trail, :table_name, "audit_log") |> to_string()
+
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: "#{table}_pkey")
+  end
+
+  # Insert a changelog row idempotently. If the pkey (or other unique) already exists
+  # (e.g. sequence rewind, retry, or explicit id reuse), do not raise ConstraintError
+  # and do not duplicate the row. The unique_constraint/3 declaration ensures that
+  # any violation is returned as a changeset error instead of a raised exception;
+  # on_conflict makes the common duplicate-pkey case a successful no-op.
+  defp insert_changelog(repo, changeset) do
+    table = Application.get_env(:ecto_trail, :table_name, "audit_log") |> to_string()
+    pkey = "#{table}_pkey"
+    repo.insert(changeset, on_conflict: :nothing, conflict_target: {:constraint, pkey})
   end
 end

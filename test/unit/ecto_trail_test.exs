@@ -198,6 +198,35 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "update_and_log does not raise on audit_log pkey unique violation (log_changes lacked unique_constraint/3 and idempotency)",
+         %{schema: schema} do
+      # First update_and_log creates the resource update and *one* audit log row (advances the id sequence)
+      result1 =
+        schema
+        |> Changeset.change(%{name: "first update"})
+        |> TestRepo.update_and_log("cowboy")
+
+      assert {:ok, %Resource{name: "first update"}} = result1
+
+      # Force the audit_log id sequence to repeat the last generated value on nextval.
+      # This makes the *next* log_changes/5 insert attempt to use a PK that already exists.
+      # Pre-fix this produces: ** (Ecto.ConstraintError) constraint error ... "audit_log_pkey" (unique_constraint)
+      # from inside log_changes at the repo.insert/1.
+      TestRepo.query!("SELECT setval('audit_log_id_seq', (SELECT last_value FROM audit_log_id_seq) - 1)")
+
+      # Second update_and_log on a (new) change for same or another resource will trigger a second log insert
+      # that collides on the pkey.
+      result2 =
+        schema
+        |> Changeset.change(%{name: "second update after seq rewind"})
+        |> TestRepo.update_and_log("cowboy")
+
+      # With the fix (unique_constraint + on_conflict or proper handling), this must succeed.
+      # The library already swallows {:error, _} from the log step by returning {:ok, reason},
+      # and with on_conflict: :nothing the insert itself won't error.
+      assert {:ok, %Resource{name: "second update after seq rewind"}} = result2
+    end
   end
 
   describe "upsert_and_log/3" do
