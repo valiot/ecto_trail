@@ -198,6 +198,34 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise on duplicate audit_log pkey (update_and_log inside tx still succeeds)", %{
+      schema: schema
+    } do
+      # Force a pkey collision on the next audit_log insert by reserving the next sequence value
+      # and pre-inserting a row with that id. Without unique_constraint in changelog_changeset this
+      # surfaces as Ecto.ConstraintError from log_changes inside update_and_log's transaction.
+      chosen_id = 1_000_000_000
+
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        """
+          INSERT INTO "audit_log" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at)
+          VALUES ($1, 'dupe-actor', 'resources', '999', $2, 'insert', now())
+        """,
+        [chosen_id, %{}]
+      )
+
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1)", [chosen_id - 1])
+
+      result =
+        schema
+        |> Changeset.change(%{name: "after-dupe-pkey"})
+        |> TestRepo.update_and_log("dupe-test-actor")
+
+      assert {:ok, %Resource{name: "after-dupe-pkey"}} = result
+      assert %{name: "after-dupe-pkey"} = TestRepo.get(Resource, schema.id)
+    end
   end
 
   describe "upsert_and_log/3" do
