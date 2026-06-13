@@ -56,6 +56,11 @@ defmodule EctoTrail do
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
 
+  # Table name for the audit log (can be overridden); used to derive a pkey constraint name.
+  @table_name Application.compile_env(:ecto_trail, :table_name, "audit_log")
+  # Always protect the two most common pkey names plus the one derived from the configured table name.
+  @audit_log_pkey_names Enum.uniq(["audit_log_pkey", "audit_logs_pkey", "#{@table_name}_pkey"])
+
   defmacro __using__(_) do
     quote do
       @type action_type :: :insert | :update | :upsert | :delete
@@ -572,6 +577,18 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    cs = Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+
+    Enum.reduce(@audit_log_pkey_names, cs, fn name, acc ->
+      Changeset.unique_constraint(acc, :id, name: name)
+    end)
+  end
+
+  # Test seam (MIX_ENV=test only) so we can assert that unique_constraints are declared
+  # on the audit log changeset without requiring a live DB. Declaring these turns a
+  # would-be Ecto.ConstraintError (e.g. "audit_logs_pkey") into a normal changeset error.
+  if Mix.env() == :test do
+    @doc false
+    def __test_only_changelog_changeset__(attrs), do: changelog_changeset(attrs)
   end
 end
