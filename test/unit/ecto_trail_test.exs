@@ -329,4 +329,37 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log write failures are non-fatal (do not abort caller tx or raise)" do
+    test "log/5 swallows pkey unique constraint error on audit insert and returns ok" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "r-for-log"})
+      # First log creates an audit row and consumes one pkey value
+      assert {:ok, ^res} = TestRepo.log(res, %{}, "pkey-collide", :update)
+      first_log = TestRepo.one(from(c in Changelog, where: c.actor_id == "pkey-collide"))
+      # Rewind sequence so the next audit insert will attempt a duplicate pkey value
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1::bigint)", [first_log.id - 1])
+
+      # This would raise Ecto.ConstraintError today (audit_logs_pkey / audit_log_pkey)
+      assert {:ok, ^res} = TestRepo.log(res, %{}, "pkey-collide", :update)
+    end
+
+    test "update_and_log swallows pkey unique constraint error inside a transaction (matches OPS-4581)" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "r-for-update"})
+      # Seed one audit row via a direct log to advance pkey
+      TestRepo.log(schema, %{}, "pkey-collide-upd", :update)
+      first = TestRepo.one(from(c in Changelog, where: c.actor_id == "pkey-collide-upd"))
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1::bigint)", [first.id - 1])
+
+      # The call under test is inside a transaction (as in the reported stack)
+      result =
+        TestRepo.transaction(fn ->
+          schema
+          |> Changeset.change(%{name: "updated-under-collision"})
+          |> TestRepo.update_and_log("pkey-collide-upd")
+        end)
+
+      assert {:ok, %Resource{name: "updated-under-collision"}} = result
+      # The main update succeeded; the audit failure was swallowed
+    end
+  end
 end
