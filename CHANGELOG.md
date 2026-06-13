@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `*_and_log/*` and `log/*` (via `log_changes/5`) no longer raise `Ecto.ConstraintError` on `audit_log(s)_pkey` when the audit insert collides on the primary key (e.g. retry path where log row was committed but outer tx rolled back). Uses `on_conflict: :nothing` for the audit row insert. Closes OPS-4564.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed
