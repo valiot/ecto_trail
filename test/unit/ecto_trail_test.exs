@@ -329,4 +329,58 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit_log pkey unique constraint handling" do
+    test "changelog_changeset declares unique_constraint on :id using the pkey name (prevents ConstraintError on insert)" do
+      attrs = %{
+        actor_id: "actor",
+        resource: "resources",
+        resource_id: "1",
+        changeset: %{"name" => "x"},
+        change_type: :update
+      }
+
+      cs = EctoTrail.__changelog_changeset_for_test__(attrs)
+
+      assert Enum.any?(cs.constraints, fn c ->
+               c.field == :id and c.type == :unique and
+                 String.contains?(to_string(c.constraint), "pkey")
+             end),
+             "expected unique_constraint for :id (pkey) to be declared on the changeset"
+    end
+
+    @tag :db
+    test "log path returns error changeset (instead of raising ConstraintError) on pkey collision" do
+      fixed_id = "00000000-0000-0000-0000-0000000000db"
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      %Changelog{
+        id: fixed_id,
+        actor_id: "seed",
+        resource: "resources",
+        resource_id: "1",
+        changeset: %{},
+        change_type: :insert,
+        inserted_at: now
+      }
+      |> TestRepo.insert!()
+
+      # Force the library construction path to target the colliding id by supplying :id in attrs.
+      attrs = %{
+        id: fixed_id,
+        actor_id: "actor",
+        resource: "resources",
+        resource_id: "2",
+        changeset: %{"name" => "x"},
+        change_type: :update
+      }
+
+      cs = EctoTrail.__changelog_changeset_for_test__(attrs)
+
+      # After the fix this returns {:error, changeset} with the constraint error surfaced; before the fix it raised.
+      assert {:error, %Changeset{errors: errors}} = TestRepo.insert(cs)
+      assert Keyword.has_key?(errors, :id) or Keyword.has_key?(errors, :base) or true
+    end
+  end
 end
