@@ -198,6 +198,36 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "returns {:error, changeset} with unique_constraint on pkey violation instead of raising Ecto.ConstraintError",
+         %{schema: schema} do
+      # Seed one log entry, then plant a conflicting pkey row and rewind the sequence
+      # so the *next* audit log insert (from update_and_log) collides on the pkey.
+      first_log = TestRepo.one(Changelog)
+      conflict_id = first_log.id
+
+      TestRepo.delete(first_log)
+
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        "INSERT INTO \"audit_log\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at)\n           VALUES ($1, 'seeded','resources','#{schema.id}', '{}'::jsonb, 'insert', now())",
+        [conflict_id]
+      )
+
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        "SELECT setval(pg_get_serial_sequence('audit_log', 'id'), $1, false)",
+        [conflict_id]
+      )
+
+      result =
+        schema
+        |> Changeset.change(%{name: "after-conflict"})
+        |> TestRepo.update_and_log("cowboy")
+
+      assert {:error, %Changeset{errors: errors}} = result
+      assert Keyword.has_key?(errors, :id)
+    end
   end
 
   describe "upsert_and_log/3" do
