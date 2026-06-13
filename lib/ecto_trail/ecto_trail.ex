@@ -55,6 +55,7 @@ defmodule EctoTrail do
   @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
+  @audit_log_table Application.compile_env(:ecto_trail, :table_name, "audit_log")
 
   defmacro __using__(_) do
     quote do
@@ -383,16 +384,27 @@ defmodule EctoTrail do
     actor_id_str = to_actor_id_string(actor_id)
     resource_id_str = to_string(operation.id)
 
-    %{
-      actor_id: actor_id_str,
-      resource: resource,
-      resource_id: resource_id_str,
-      changeset: changes,
-      change_type: operation_type
-    }
-    |> changelog_changeset()
-    |> repo.insert()
-    |> case do
+    cs =
+      %{
+        actor_id: actor_id_str,
+        resource: resource,
+        resource_id: resource_id_str,
+        changeset: changes,
+        change_type: operation_type
+      }
+      |> changelog_changeset()
+
+    try do
+      repo.insert(cs)
+    rescue
+      e in Ecto.ConstraintError ->
+        Logger.error(
+          "Failed to store changes in audit log: #{inspect(operation)} " <>
+            "by actor #{inspect(actor_id)}. Reason: #{inspect(e)}"
+        )
+
+        {:ok, e}
+    else
       {:ok, changelog} ->
         {:ok, changelog}
 
@@ -424,16 +436,27 @@ defmodule EctoTrail do
     actor_id_str = to_actor_id_string(actor_id)
     resource_id_str = to_string(operation.id)
 
-    %{
-      actor_id: actor_id_str,
-      resource: resource,
-      resource_id: resource_id_str,
-      changeset: changes,
-      change_type: operation_type
-    }
-    |> changelog_changeset()
-    |> repo.insert()
-    |> case do
+    cs =
+      %{
+        actor_id: actor_id_str,
+        resource: resource,
+        resource_id: resource_id_str,
+        changeset: changes,
+        change_type: operation_type
+      }
+      |> changelog_changeset()
+
+    try do
+      repo.insert(cs)
+    rescue
+      e in Ecto.ConstraintError ->
+        Logger.error(
+          "Failed to store changes in audit log: #{inspect(struct_or_changeset)} " <>
+            "by actor #{inspect(actor_id)}. Reason: #{inspect(e)}"
+        )
+
+        {:ok, e}
+    else
       {:ok, changelog} ->
         {:ok, changelog}
 
@@ -572,6 +595,10 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
+    table = to_string(@audit_log_table)
+    pkey_constraint = "#{table}_pkey"
+
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: pkey_constraint)
   end
 end

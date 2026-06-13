@@ -329,4 +329,41 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "duplicate pkey guard for audit log (OPS-4580)" do
+    test "update_and_log succeeds (swallows pkey unique violation) when audit log insert hits audit_log_pkey constraint" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "orig"})
+
+      # Pre-insert a conflicting row at a high id, then rewind the sequence so the
+      # plain insert performed inside log_changes will allocate the same id and hit
+      # the pkey unique constraint (reproduces the production ConstraintError).
+      high_id = 2_000_000
+
+      conflicting = %Changelog{
+        id: high_id,
+        actor_id: "collision-actor",
+        resource: "resources",
+        resource_id: "999999",
+        changeset: %{},
+        change_type: :update,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      }
+
+      TestRepo.insert!(conflicting)
+
+      # Rewind sequence so nextval yields high_id on the next insert inside the lib
+      seq_name = "audit_log_id_seq"
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false);", [seq_name, high_id - 1])
+
+      # This would raise Ecto.ConstraintError on current code (log_changes does bare repo.insert without guard)
+      result =
+        schema
+        |> Changeset.change(%{name: "updated-under-collision"})
+        |> TestRepo.update_and_log("collision-actor")
+
+      assert {:ok, %Resource{name: "updated-under-collision"}} = result
+      # The log for this actor was not inserted (collision swallowed); main update still committed.
+      refute TestRepo.exists?(from(c in Changelog, where: c.actor_id == "collision-actor"))
+    end
+  end
 end
