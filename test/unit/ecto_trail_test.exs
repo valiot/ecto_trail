@@ -329,4 +329,34 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit pkey constraint handling (prevents Ecto.ConstraintError on <table>_pkey)" do
+    test "update_and_log does not raise ConstraintError when audit_log pkey collides (declares unique_constraint)" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "name"})
+
+      # Pick a high id unlikely to be used by concurrent tests and force-insert a pre-existing audit row with that PK.
+      high_id = 9_000_000_000
+
+      %Changelog{
+        id: high_id,
+        actor_id: "seed",
+        resource: "resources",
+        resource_id: "0",
+        changeset: %{},
+        change_type: :insert,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      }
+      |> TestRepo.insert!()
+
+      # Force the sequence so the *next* normal insert (inside update_and_log -> log_changes) will attempt this same id.
+      # setval(..., n, false) => next nextval() returns n.
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, false)", [high_id])
+
+      # Before the fix this raises Ecto.ConstraintError on "audit_log_pkey" (or configured table).
+      # After declaring unique_constraint in changelog_changeset, Ecto turns it into a changeset error,
+      # which log_changes swallows (returns {:ok, reason} after logging) and the outer tx succeeds.
+      result = schema |> Changeset.change(%{name: "new"}) |> TestRepo.update_and_log("actor")
+      assert {:ok, %Resource{name: "new"}} = result
+    end
+  end
 end
