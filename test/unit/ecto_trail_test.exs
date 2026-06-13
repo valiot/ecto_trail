@@ -227,6 +227,41 @@ defmodule EctoTrailTest do
     end
   end
 
+  describe "audit log primary key constraint handling (OPS-4591)" do
+    test "upsert_and_log does not raise Ecto.ConstraintError on audit_log pkey collision and succeeds" do
+      {:ok, res} = TestRepo.insert(%Resource{name: "collide-base"})
+
+      # Seed a row with a specific id and rewind the sequence so the *next* insert into audit_log will collide on pkey.
+      id = 2_000_000
+
+      TestRepo.query!(
+        "INSERT INTO \"audit_log\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES ($1, 'seed', 'resources', '0', '{}'::jsonb, 'insert', now())",
+        [id]
+      )
+
+      TestRepo.query!("SELECT setval(pg_get_serial_sequence('audit_log','id'), $1, false)", [id])
+
+      # Before the fix this raises Ecto.ConstraintError from log_changes/5 because no unique_constraint/3 was declared on the changeset.
+      result = res |> Changeset.change(%{name: "after-collide"}) |> TestRepo.upsert_and_log("collide-actor")
+      assert {:ok, %Resource{name: "after-collide"}} = result
+    end
+
+    test "insert_and_log does not raise Ecto.ConstraintError on audit_log pkey collision and succeeds" do
+      # Force collision on next audit_log insert
+      id = 3_000_000
+
+      TestRepo.query!(
+        "INSERT INTO \"audit_log\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES ($1, 'seed2', 'resources', '0', '{}'::jsonb, 'insert', now())",
+        [id]
+      )
+
+      TestRepo.query!("SELECT setval(pg_get_serial_sequence('audit_log','id'), $1, false)", [id])
+
+      result = TestRepo.insert_and_log(%Resource{name: "insert-after-collide"}, "collide-actor2")
+      assert {:ok, %Resource{name: "insert-after-collide"}} = result
+    end
+  end
+
   describe "use inside Ecto.Multi (prevents nested multi tx RuntimeError)" do
     test "insert_and_log succeeds and logs when invoked from a Multi.run step" do
       multi =
