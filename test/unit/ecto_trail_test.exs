@@ -198,6 +198,39 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError when audit log pkey is violated (swallowed)" do
+      # Create a resource and do one successful update_and_log (creates 1 changelog row)
+      {:ok, schema} = TestRepo.insert(%Resource{name: "name"})
+
+      {:ok, _updated} =
+        schema
+        |> Changeset.change(%{name: "first update"})
+        |> TestRepo.update_and_log("constraint-test")
+
+      # Determine the audit table and its id sequence (supports configured table_name)
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_sql = "SELECT pg_get_serial_sequence($1, 'id')"
+      {:ok, %{rows: [[seq_name]]}} = Ecto.Adapters.SQL.query(TestRepo, seq_sql, [table])
+
+      # Read the id of the log row we just created
+      log = TestRepo.one(from(c in Changelog, order_by: [desc: c.inserted_at], limit: 1))
+      used_id = log.id
+
+      # Rewind the sequence so the *next* insert will try to use this same id -> pkey collision
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq_name, used_id])
+
+      # Now call update_and_log again. Internally log_changes will attempt an insert that collides on pkey.
+      # Before the fix: raises Ecto.ConstraintError (missing unique_constraint on the cs).
+      # After the fix: the cs declares the pkey constraint, Ecto turns it into cs error, the existing
+      # error handling in log_changes swallows it (Logger + {:ok, reason}), and update_and_log succeeds.
+      result =
+        schema
+        |> Changeset.change(%{name: "second update"})
+        |> TestRepo.update_and_log("constraint-test")
+
+      assert {:ok, %Resource{name: "second update"}} = result
+    end
   end
 
   describe "upsert_and_log/3" do

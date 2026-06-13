@@ -5,6 +5,8 @@ defmodule EctoTrail.Changelog do
   use Ecto.Schema
 
   @table_name Application.compile_env(:ecto_trail, :table_name, "audit_log")
+  @pkey_constraint_name "#{@table_name}_pkey"
+
   schema @table_name do
     field(:actor_id, :string)
     field(:resource, :string)
@@ -14,4 +16,7 @@ defmodule EctoTrail.Changelog do
 
     timestamps(type: :utc_datetime, updated_at: false)
   end
+
+  @doc false
+  def pkey_constraint_name, do: @pkey_constraint_name
 end
