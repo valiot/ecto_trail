@@ -198,6 +198,40 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "update_and_log does not raise Ecto.ConstraintError when audit pkey collides (e.g. sequence or race)",
+         %{schema: schema} do
+      # First update_and_log creates an audit row (and advances the audit_log id sequence)
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "name v2"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      # Find the id that was just assigned to the audit row for this actor
+      %Changelog{id: last_audit_id} =
+        TestRepo.one(
+          from(c in Changelog,
+            where: c.actor_id == "pkey-collision-actor",
+            order_by: [desc: c.id],
+            limit: 1
+          )
+        )
+
+      # Rewind the sequence so the *next* audit insert will attempt to reuse the same pkey value
+      seq_name = "audit_log_id_seq"
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq_name, last_audit_id - 1])
+
+      # Second update_and_log on same resource: the internal log_changes will try to insert
+      # another audit row and hit a pkey unique violation ("audit_log_pkey").
+      # Before the fix this raises Ecto.ConstraintError and aborts the caller's tx.
+      # After the fix (unique_constraint declaration + defensive handling) it must not raise.
+      result =
+        schema
+        |> Changeset.change(%{name: "name v3"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      assert {:ok, %Resource{name: "name v3"}} = result
+    end
   end
 
   describe "upsert_and_log/3" do

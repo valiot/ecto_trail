@@ -14,4 +14,8 @@ defmodule EctoTrail.Changelog do
 
     timestamps(type: :utc_datetime, updated_at: false)
   end
+
+  @doc false
+  @spec pkey_constraint_name() :: String.t()
+  def pkey_constraint_name, do: "#{@table_name}_pkey"
 end
