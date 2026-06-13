@@ -225,6 +225,43 @@ defmodule EctoTrailTest do
                change_type: :upsert
              } = TestRepo.one(Changelog)
     end
+
+    test "does not raise Ecto.ConstraintError on audit_log pkey collision during upsert_and_log" do
+      # Seed one normal operation to advance the audit_log sequence
+      {:ok, _} = TestRepo.insert_and_log(%Resource{name: "seed-for-collision"}, "seed-actor")
+
+      # Determine current max id in audit_log and occupy the "next" id by inserting a colliding row directly
+      %{rows: [[max_id]]} = Ecto.Adapters.SQL.query!(TestRepo, "SELECT COALESCE(MAX(id), 0) FROM audit_log")
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # Insert a row that will collide with the next auto-generated PK (use table name to bypass schema field list)
+      {1, _} =
+        TestRepo.insert_all("audit_log", [
+          %{
+            id: max_id + 1,
+            actor_id: "seed",
+            resource: "resources",
+            resource_id: "0",
+            changeset: %{},
+            change_type: "insert",
+            inserted_at: now
+          }
+        ])
+
+      # Rewind the sequence so the next insert will attempt to use the occupied value (max_id + 1)
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1)", [max_id])
+
+      # This used to raise Ecto.ConstraintError on "audit_log_pkey" (or audit_logs_pkey in user tables)
+      # because changelog_changeset did not declare unique_constraint for the PK.
+      result =
+        %Resource{}
+        |> Changeset.change(%{name: "after-collision"})
+        |> TestRepo.upsert_and_log("collision-actor")
+
+      # Main operation succeeds; the audit log insert failure is logged+swallowed (pre-existing behavior after constraint is handled)
+      assert {:ok, %Resource{name: "after-collision"}} = result
+    end
   end
 
   describe "use inside Ecto.Multi (prevents nested multi tx RuntimeError)" do

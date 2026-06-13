@@ -572,6 +572,18 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    cs = Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+
+    # Add unique_constraint declarations for the audit log PK so that DB-level
+    # unique violations (e.g. sequence reseed, manual id, or upsert races) are
+    # turned into changeset errors instead of raising Ecto.ConstraintError.
+    # Covers the table name from config as well as the two most common literal names
+    # observed in production ("audit_log_pkey", "audit_logs_pkey").
+    table = Changelog.__schema__(:source)
+
+    cs
+    |> Changeset.unique_constraint(:id, name: "#{table}_pkey")
+    |> Changeset.unique_constraint(:id, name: "audit_log_pkey")
+    |> Changeset.unique_constraint(:id, name: "audit_logs_pkey")
   end
 end
