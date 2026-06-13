@@ -329,4 +329,53 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "pkey constraint handling on audit_log inserts (OPS-4564)" do
+    test "update_and_log succeeds and does not raise ConstraintError when audit log insert hits pkey unique violation (e.g. retry after log committed but main tx rolled back)" do
+      TestRepo.delete_all(Changelog)
+
+      {:ok, schema} = TestRepo.insert(%Resource{name: "pkey-dup"})
+
+      # Seed a row at a high explicit id using insert_all (bypasses our changeset), then force the sequence
+      # so the *next* audit insert (inside update_and_log -> log_changes) will use a colliding pkey value.
+      high_id = 1_000_000_000
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      TestRepo.insert_all(Changelog, [
+        %{
+          id: high_id,
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: "0",
+          changeset: %{},
+          change_type: :insert,
+          inserted_at: now
+        }
+      ])
+
+      # Compute the actual sequence name for the id column (portable across table_name configs)
+      seq_row =
+        Ecto.Adapters.SQL.query!(TestRepo, "SELECT pg_get_serial_sequence('audit_log', 'id')")
+
+      seq_name =
+        case seq_row do
+          %{rows: [[seq]]} when is_binary(seq) -> seq
+          _ -> "audit_log_id_seq"
+        end
+
+      # Set sequence so nextval yields the colliding high_id
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, false)", [seq_name, high_id])
+
+      # This will trigger log_changes/5 -> repo.insert() for Changelog.
+      # Before the fix this raises Ecto.ConstraintError on "audit_log_pkey" (or audit_logs_pkey),
+      # aborting the caller's transaction (matches the OPS-4564 production stack).
+      result =
+        schema
+        |> Changeset.change(%{name: "after-dup"})
+        |> TestRepo.update_and_log("pkey-dup-actor")
+
+      assert {:ok, %Resource{name: "after-dup"}} = result
+      assert TestRepo.exists?(from(c in Changelog, where: c.id == ^high_id))
+    end
+  end
 end
