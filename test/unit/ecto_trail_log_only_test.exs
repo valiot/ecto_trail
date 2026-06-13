@@ -1,5 +1,7 @@
 defmodule EctoTrailLogOnlyTest do
   use EctoTrail.DataCase
+  @moduletag :db
+
   alias EctoTrail.Changelog
   doctest EctoTrail
 

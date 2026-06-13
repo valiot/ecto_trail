@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `*_and_log/*` and `log/*` no longer raise `Ecto.ConstraintError` on duplicate `audit_log` pkey (e.g. race on `audit_logs_pkey`). The pkey is now declared via `unique_constraint/2` (derived from configured table name) so the existing soft-failure paths treat it as a log write failure and preserve the caller's transaction. Closes OPS-4622.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed

@@ -1,5 +1,7 @@
 defmodule EctoTrailTest do
   use EctoTrail.DataCase
+  @moduletag :db
+
   alias EctoTrail.Changelog
   alias Ecto.Changeset
   alias Ecto.Multi
@@ -197,6 +199,46 @@ defmodule EctoTrailTest do
 
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
+    end
+
+    test "does not raise Ecto.ConstraintError on audit log pkey collision and still succeeds the user update",
+         %{schema: schema} do
+      # First, let one normal log row be created so we can steal its pkey value
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "first-update"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      # Grab the id of the audit log row that was just written
+      [%{id: occupied_log_id}] = TestRepo.all(Changelog)
+
+      # Remove it so the pkey value becomes available for us to re-use
+      TestRepo.delete_all(from(c in Changelog, where: c.id == ^occupied_log_id))
+
+      # Pre-occupy that exact pkey value with a dummy log row (simulates the race / duplicate key scenario)
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      %Changelog{
+        id: occupied_log_id,
+        actor_id: "seed-occupier",
+        resource: "resources",
+        resource_id: to_string(schema.id),
+        changeset: %{},
+        change_type: :insert,
+        inserted_at: now
+      }
+      |> TestRepo.insert!()
+
+      # Now perform an update_and_log; the internal log_changes will attempt to insert a new audit row
+      # and will hit a pkey unique violation on the pre-occupied id. With the fix this must be turned
+      # into a soft error (unique_constraint) so no ConstraintError propagates and the user update succeeds.
+      result =
+        schema
+        |> Changeset.change(%{name: "after-collision"})
+        |> TestRepo.update_and_log("pkey-collision-actor")
+
+      assert {:ok, %Resource{name: "after-collision"}} = result
+      assert [%{name: "after-collision"}] = TestRepo.all(Resource)
     end
   end
 

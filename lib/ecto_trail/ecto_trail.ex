@@ -571,7 +571,5 @@ defmodule EctoTrail do
   defp map_custom_ecto_type({field, value}) when is_map(value), do: {field, value}
   defp map_custom_ecto_type(value), do: value
 
-  defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
-  end
+  defp changelog_changeset(attrs), do: Changelog.changeset(attrs)
 end
