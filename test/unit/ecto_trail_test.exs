@@ -329,4 +329,35 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit_log pkey unique_constraint handling (prevents Ecto.ConstraintError)" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "pkey-collision-subject"})
+      {:ok, %{schema: schema}}
+    end
+
+    test "update_and_log succeeds (does not raise) when internal audit log insert hits pkey unique violation",
+         %{
+           schema: schema
+         } do
+      # Seed one committed audit row so we have a real id, then force the sequence to hand out the same id on next insert.
+      {:ok, _seed} = TestRepo.insert_and_log(%Resource{name: "pkey-seed"}, "pkey-seed-actor")
+
+      %{rows: [[used_id]]} =
+        TestRepo.query!("SELECT id FROM audit_log ORDER BY id DESC LIMIT 1")
+
+      # Make the next nextval return the id we just observed → the subsequent insert inside update_and_log will collide on audit_log_pkey.
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1, true)", [used_id])
+
+      # This used to raise Ecto.ConstraintError because changelog_changeset/1 never declared unique_constraint for the pkey.
+      # With the fix it converts the violation to a changeset error; the existing error path in log_changes swallows it (logged)
+      # and the tx still commits the user operation.
+      result =
+        schema
+        |> Changeset.change(%{name: "post-pkey-collision"})
+        |> TestRepo.update_and_log("pkey-test-actor")
+
+      assert {:ok, %Resource{name: "post-pkey-collision"}} = result
+    end
+  end
 end

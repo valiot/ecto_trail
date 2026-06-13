@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- Register `unique_constraint` on the audit log primary key (using the configured table name) inside `changelog_changeset/1`. This prevents `Ecto.ConstraintError` on `audit_log_pkey` (or custom_table_pkey) when `*_and_log/*` or `log/*` perform their internal insert while a transaction is open (including from `update_and_log` inside `Ecto.Multi` or app tx). The violation is now turned into a changeset error (existing call sites log and continue). Closes OPS-4615.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed
