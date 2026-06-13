@@ -198,6 +198,25 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise on audit log pkey unique violation (best-effort logging, duplicate-log guard)", %{
+      schema: schema
+    } do
+      # Seed a log row and rewind the sequence so the internal log insert will collide on the pkey.
+      TestRepo.query!(
+        "INSERT INTO audit_log (actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES ('seed','resources','0','{}','insert', now())"
+      )
+
+      %{rows: [[max_id]]} = TestRepo.query!("SELECT max(id) FROM audit_log")
+      TestRepo.query!("SELECT setval('audit_log_id_seq', $1)", [max_id - 1])
+
+      result =
+        schema
+        |> Changeset.change(%{name: "after-collision"})
+        |> TestRepo.update_and_log("cowboy")
+
+      assert {:ok, %Resource{name: "after-collision"}} = result
+    end
   end
 
   describe "upsert_and_log/3" do

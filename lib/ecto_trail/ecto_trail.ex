@@ -391,7 +391,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> repo.insert(on_conflict: :nothing, conflict_target: :id)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
@@ -432,7 +432,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> repo.insert(on_conflict: :nothing, conflict_target: :id)
     |> case do
       {:ok, changelog} ->
         {:ok, changelog}
