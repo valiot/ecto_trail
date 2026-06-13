@@ -391,6 +391,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: audit_log_pkey_constraint())
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
@@ -432,6 +433,7 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
+    |> Changeset.unique_constraint(:id, name: audit_log_pkey_constraint())
     |> repo.insert()
     |> case do
       {:ok, changelog} ->
@@ -445,6 +447,12 @@ defmodule EctoTrail do
 
         {:ok, reason}
     end
+  end
+
+  # Resolve the actual primary key constraint name for the audit_log table (may be "audit_log_pkey" or table_name_pkey)
+  defp audit_log_pkey_constraint do
+    table = to_string(Application.get_env(:ecto_trail, :table_name, "audit_log"))
+    "#{table}_pkey"
   end
 
   defp prepare_struct_or_changeset(%Changeset{data: data} = _changeset, :delete), do: data
