@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `log_changes/5` (and `log_changes_alone`) now rescue raised errors (including `Ecto.ConstraintError` on `audit_logs_pkey`) during audit log `insert` and treat them as best-effort failures (matching the existing `{:error, _}` path). Prevents the error from escaping `*_and_log/*` and the caller's `Repo.transaction`. Added TDD regression test. Closes OPS-4592.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed

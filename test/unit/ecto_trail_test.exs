@@ -198,6 +198,45 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "update_and_log succeeds (swallows log failure) when audit log insert raises Ecto.ConstraintError on pkey",
+         %{schema: schema} do
+      # First update+log to populate a log row and advance the sequence
+      {:ok, _} =
+        schema
+        |> Changeset.change(%{name: "first-update"})
+        |> TestRepo.update_and_log("cowboy")
+
+      # Force a pkey collision on the *next* Changelog insert by occupying the id the sequence will next emit
+      max_id = TestRepo.one(from(c in Changelog, select: max(c.id))) || 0
+      colliding_id = max_id + 1
+
+      %Changelog{}
+      |> Changeset.cast(
+        %{
+          id: colliding_id,
+          actor_id: "force-collision",
+          resource: "resources",
+          resource_id: to_string(schema.id),
+          changeset: %{},
+          change_type: :update
+        },
+        [:id, :actor_id, :resource, :resource_id, :changeset, :change_type]
+      )
+      |> TestRepo.insert!()
+
+      # Rewind sequence so nextval yields the colliding PK again -> the insert in log_changes will raise ConstraintError
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, true)", [colliding_id - 1])
+
+      # With the bug this raises Ecto.ConstraintError from inside the tx fn in update_and_log/4 (log_changes/5).
+      # After fix: best-effort logging swallows it (like the {:error, _} path) and the update succeeds.
+      result =
+        schema
+        |> Changeset.change(%{name: "after-collision"})
+        |> TestRepo.update_and_log("cowboy")
+
+      assert {:ok, %Resource{name: "after-collision"}} = result
+    end
   end
 
   describe "upsert_and_log/3" do
