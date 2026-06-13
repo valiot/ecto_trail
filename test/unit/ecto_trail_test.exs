@@ -329,4 +329,34 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "update_and_log/3 pkey constraint resilience" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "name"})
+      {:ok, %{schema: schema}}
+    end
+
+    test "does not raise Ecto.ConstraintError on audit_log pkey collision; main update succeeds and log failure is swallowed",
+         %{schema: schema} do
+      # Force a deterministic pkey collision for the *next* library-generated insert.
+      # Insert a colliding row with an explicit id, then setval so the sequence will emit the same id.
+      TestRepo.query!("""
+        INSERT INTO audit_log (id, actor_id, resource, resource_id, changeset, change_type, inserted_at)
+        VALUES (987654, 'seed', 'resources', '1', '{}', 'update', now())
+      """)
+
+      TestRepo.query!("SELECT setval('audit_log_id_seq', 987653, true)")
+
+      # The upcoming log insert inside update_and_log will use nextval()=987654 and hit pkey dup.
+      # Before the fix: raises Ecto.ConstraintError (see OPS-4594 stack).
+      # After the fix: unique_constraint turns it into a changeset error; log_changes swallows it (logs + {:ok, reason}).
+      result =
+        schema
+        |> Changeset.change(%{name: "name-after-collision"})
+        |> TestRepo.update_and_log("constraint-actor")
+
+      assert {:ok, %Resource{name: "name-after-collision"}} = result
+      assert [%{name: "name-after-collision"}] = TestRepo.all(Resource)
+    end
+  end
 end
