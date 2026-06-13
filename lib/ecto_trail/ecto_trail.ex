@@ -55,6 +55,7 @@ defmodule EctoTrail do
   @default_max_params 65_000
   @changelog_fields [:actor_id, :resource, :resource_id, :changeset, :change_type]
   @not_loaded_pattern "Ecto.Association.NotLoaded"
+  @default_audit_table "audit_log"
 
   defmacro __using__(_) do
     quote do
@@ -571,7 +572,30 @@ defmodule EctoTrail do
   defp map_custom_ecto_type({field, value}) when is_map(value), do: {field, value}
   defp map_custom_ecto_type(value), do: value
 
+  # Exposed for pure unit tests (no DB) to assert constraint declarations.
+  @doc false
+  def __build_changelog_changeset_for_test__(attrs), do: changelog_changeset(attrs)
+
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    table = Application.get_env(:ecto_trail, :table_name, @default_audit_table)
+
+    pkey_candidates = [
+      "#{table}_pkey",
+      "#{String.replace(table, "_log", "_logs")}_pkey",
+      "audit_logs_pkey",
+      "audit_log_pkey"
+    ]
+
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> add_unique_constraints_for_pkey(pkey_candidates)
+  end
+
+  defp add_unique_constraints_for_pkey(changeset, []), do: changeset
+
+  defp add_unique_constraints_for_pkey(changeset, [name | rest]) do
+    changeset
+    |> Changeset.unique_constraint(:id, name: name)
+    |> add_unique_constraints_for_pkey(rest)
   end
 end
