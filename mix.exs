@@ -1,7 +1,7 @@
 defmodule EctoTrail.Mixfile do
   use Mix.Project
 
-  @version "1.0.3"
+  @version "1.0.4"
 
   def project do
     [
@@ -39,7 +39,7 @@ defmodule EctoTrail.Mixfile do
       {:excoveralls, ">= 0.5.0", only: [:dev, :test]},
       {:credo, ">= 0.5.1", only: [:dev, :test]},
       {:ecto_enum, "~> 1.0"},
-      {:benchee, "~> 1.0", only: [:dev, :test]}
+      {:benchee, "~> 1.5", only: [:dev, :test]}
     ]
   end
 

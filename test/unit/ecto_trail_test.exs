@@ -329,4 +329,59 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log pkey unique constraint" do
+    test "update_and_log does not raise Ecto.ConstraintError when audit log pkey collides (inside transaction)" do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "pkey-collision"})
+
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{table}_id_seq"
+
+      # Seed two high ids so we can force the internal changelog insert to hit a pkey violation.
+      # We pre-insert id 987654322, then setval so the next generated id during log_changes will be exactly that.
+      TestRepo.query!(
+        "INSERT INTO \"#{table}\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES (987654321, 'seed', 'resources', '0', $1, 'insert', now())",
+        [~s({})]
+      )
+
+      TestRepo.query!(
+        "INSERT INTO \"#{table}\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES (987654322, 'seed2', 'resources', '0', $1, 'insert', now())",
+        [~s({})]
+      )
+
+      TestRepo.query!("SELECT setval($1, 987654321, true)", [seq_name])
+
+      # This mirrors the reported call path: update_and_log inside a transaction.
+      result =
+        TestRepo.transaction(fn ->
+          schema
+          |> Changeset.change(%{name: "after-pkey-collision"})
+          |> TestRepo.update_and_log("pkey-collision-actor")
+        end)
+
+      # Must not raise; the audit log insert failure is swallowed (existing behavior) but no crash to caller.
+      assert {:ok, %Resource{name: "after-pkey-collision"}} = result
+    end
+
+    test "insert_and_log does not raise Ecto.ConstraintError when audit log pkey collides" do
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{table}_id_seq"
+
+      TestRepo.query!(
+        "INSERT INTO \"#{table}\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES (987654401, 'seed', 'resources', '0', $1, 'insert', now())",
+        [~s({})]
+      )
+
+      TestRepo.query!(
+        "INSERT INTO \"#{table}\" (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES (987654402, 'seed2', 'resources', '0', $1, 'insert', now())",
+        [~s({})]
+      )
+
+      TestRepo.query!("SELECT setval($1, 987654401, true)", [seq_name])
+
+      result = TestRepo.insert_and_log(%Resource{name: "insert-pkey-collision"}, "pkey-collision-actor")
+
+      assert {:ok, %Resource{name: "insert-pkey-collision"}} = result
+    end
+  end
 end
