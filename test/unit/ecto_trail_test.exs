@@ -198,6 +198,50 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "does not raise constraint error and succeeds when audit_log pkey collides (best-effort audit)", %{
+      schema: schema
+    } do
+      # Force a collision on the next audit_log PK insert by pre-inserting a row at a high id
+      # and resetting the sequence so the generated insert attempts to reuse it.
+      table = Application.get_env(:ecto_trail, :table_name, "audit_log")
+      seq_name = "#{table}_id_seq"
+
+      alias EctoTrail.Changelog
+
+      high_id = 2_000_000
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      sentinel = %Changelog{
+        id: high_id,
+        actor_id: "seed",
+        resource: "resources",
+        resource_id: "0",
+        changeset: %{},
+        change_type: :insert,
+        inserted_at: now
+      }
+
+      TestRepo.insert!(sentinel)
+
+      # Set sequence so the *next* value produced is `high_id`; the audit insert in update_and_log will collide on pkey.
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1, $2, true)", [seq_name, high_id - 1])
+
+      result =
+        schema
+        |> Changeset.change(%{name: "collision-test"})
+        |> TestRepo.update_and_log("constraint-actor")
+
+      # The update must succeed; the audit log attempt will hit unique violation on pkey,
+      # be turned into a changeset error (thanks to unique_constraint/3), logged, and swallowed per best-effort contract.
+      assert {:ok, %Resource{name: "collision-test"}} = result
+
+      # Sentinel row is still the only one for that seed; colliding insert did not create a second row.
+      assert TestRepo.aggregate(
+               from(c in Changelog, where: c.resource_id == "0" and c.actor_id == "seed"),
+               :count
+             ) == 1
+    end
   end
 
   describe "upsert_and_log/3" do
