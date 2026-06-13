@@ -329,4 +329,40 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log pkey constraint handling (OPS-4577 regression)" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "pkey-test"})
+      %{schema: schema}
+    end
+
+    test "update_and_log does not raise Ecto.ConstraintError when audit log pkey is violated; main op succeeds",
+         %{schema: schema} do
+      table_name = Application.get_env(:ecto_trail, :table_name, "audit_log")
+
+      # Seed a row at a high explicit id and set sequence so the *next* internal Changelog insert collides on the pkey.
+      high_id = 50_000_000
+
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        "INSERT INTO #{table_name} (id, actor_id, resource, resource_id, changeset, change_type, inserted_at) VALUES ($1, 'seed', 'resources', '0', $2::jsonb, 'update', now()) ON CONFLICT DO NOTHING",
+        [high_id, %{}]
+      )
+
+      Ecto.Adapters.SQL.query!(
+        TestRepo,
+        "SELECT setval(pg_get_serial_sequence($1, 'id'), $2, false)",
+        [table_name, high_id]
+      )
+
+      # Before the fix this raises Ecto.ConstraintError("constraint error when attempting to insert struct: * \"..._pkey\" (unique_constraint)").
+      # After adding unique_constraint(:id, name: "..._pkey") to the changeset it becomes a regular validation error (swallowed by log_changes to {:ok, reason}).
+      result =
+        schema
+        |> Changeset.change(%{name: "after-pkey-collision"})
+        |> TestRepo.update_and_log("pkey-actor")
+
+      assert {:ok, %Resource{name: "after-pkey-collision"}} = result
+    end
+  end
 end
