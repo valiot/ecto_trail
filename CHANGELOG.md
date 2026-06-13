@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `upsert_and_log` (and other `*_and_log`) no longer raise `Ecto.ConstraintError` on `audit_log_pkey` under concurrent upserts. `changelog_changeset` now declares `unique_constraint(:id, name: "<table>_pkey")` so Ecto turns the violation into a changeset error that the logging paths swallow. Closes OPS-4571.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed
