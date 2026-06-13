@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `*_and_log/*` and `log/*` no longer raise Ecto.ConstraintError on duplicate audit_log pkey (e.g. "audit_logs_pkey" / "audit_log_pkey"); the pkey constraint is now declared on the changeset so Ecto turns the violation into a changeset error which is logged and swallowed (best-effort, consistent with other log failures). Closes OPS-4566.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed

@@ -329,4 +329,30 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log pkey unique constraint (OPS-4566)" do
+    test "upsert_and_log (and other *_and_log) do not raise Ecto.ConstraintError on audit_log pkey duplicate; log is best-effort" do
+      # First upsert creates a log row (auto pkey id from sequence)
+      assert {:ok, %Resource{name: "first-pkey"}} =
+               TestRepo.upsert_and_log(%Resource{name: "first-pkey"}, "pkey-actor")
+
+      max_id = TestRepo.one(from(c in Changelog, select: max(c.id)))
+      refute is_nil(max_id)
+
+      # Force the audit_log sequence so the *next* log insert will reuse a pkey value that already exists.
+      # This simulates retries, deterministic log ids, heartbeat patterns, or app-level id assignment
+      # that can cause "audit_logs_pkey" (or audit_log_pkey) unique violation.
+      table = Application.compile_env(:ecto_trail, :table_name, "audit_log")
+      TestRepo.query!("SELECT setval('#{table}_id_seq', $1, false)", [max_id])
+
+      # This call will attempt to insert the main row + a Changelog whose pkey collides.
+      # Before the fix: Ecto.ConstraintError bubbles out of log_changes/5 inside the tx fn.
+      # After the fix (unique_constraint on pkey name): Ecto returns error changeset, log_changes swallows it as {:ok, reason}, main op succeeds.
+      assert {:ok, %Resource{name: "second-pkey"}} =
+               TestRepo.upsert_and_log(%Resource{name: "second-pkey"}, "pkey-actor")
+
+      # Main operation succeeded; we have at least the first log (second attempt was de-duped or best-effort)
+      assert TestRepo.aggregate(Changelog, :count) >= 1
+    end
+  end
 end
