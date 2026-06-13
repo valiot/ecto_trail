@@ -329,4 +329,44 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "handles pkey constraint violations on audit_log gracefully (no ConstraintError)" do
+    test "insert_and_log succeeds even if audit PK would collide (e.g. sequence skew)" do
+      # Prime the audit_log with an explicit high id via insert_all (bypasses our changeset)
+      colliding_id = 1_000_007
+
+      # Insert a "dummy" changelog row claiming that id
+      {1, _} =
+        TestRepo.insert_all(
+          Changelog,
+          [
+            %{
+              id: colliding_id,
+              actor_id: "seq-collision",
+              resource: "resources",
+              resource_id: "0",
+              changeset: %{},
+              change_type: :insert,
+              inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+            }
+          ]
+        )
+
+      # Force the sequence so the next generated id (via default) will collide with the one we inserted.
+      # setval(seq, n, true) sets last_value to n; next nextval() returns n+1.
+      # So set to colliding_id-1 to make the next default-generated id == colliding_id.
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval('audit_log_id_seq', $1, true)", [colliding_id - 1])
+
+      # Now perform an insert_and_log; internally it will let PG generate the id for the audit row,
+      # which will collide. Without unique_constraint handling on the changeset this raises Ecto.ConstraintError.
+      assert {:ok, %Resource{name: "collide-test"}} =
+               TestRepo.insert_and_log(%Resource{name: "collide-test"}, "pkey-actor")
+
+      # The main resource was inserted
+      assert TestRepo.exists?(from(r in Resource, where: r.name == "collide-test"))
+
+      # The log step did not succeed in inserting an audit row (constraint violation was turned into error)
+      refute TestRepo.exists?(from(c in Changelog, where: c.actor_id == "pkey-actor"))
+    end
+  end
 end
