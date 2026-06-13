@@ -198,6 +198,35 @@ defmodule EctoTrailTest do
       assert [%{name: "name"}] = TestRepo.all(Resource)
       assert [] == TestRepo.all(Changelog)
     end
+
+    test "swallows audit log pkey unique constraint violation (no unique_constraint/3) and still succeeds the user update",
+         %{schema: schema} do
+      # Seed an audit row so a pkey is occupied, then rewind sequence so next insert will collide on pkey
+      {:ok, _} =
+        %Changelog{
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: "0",
+          changeset: %{},
+          change_type: :insert,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        }
+        |> TestRepo.insert()
+
+      # Force nextval to return the current max (which is occupied) so the audit insert will raise Ecto.ConstraintError on pkey
+      TestRepo.query!(
+        "SELECT setval(pg_get_serial_sequence('audit_log','id'), (SELECT MAX(id) FROM audit_log), false)"
+      )
+
+      result =
+        schema
+        |> Changeset.change(%{name: "name-after-collision"})
+        |> TestRepo.update_and_log("collision-actor")
+
+      # Primary operation must succeed (the bug was that ConstraintError aborted the tx)
+      assert {:ok, %Resource{name: "name-after-collision"}} = result
+      assert %{name: "name-after-collision"} = TestRepo.one(Resource)
+    end
   end
 
   describe "upsert_and_log/3" do

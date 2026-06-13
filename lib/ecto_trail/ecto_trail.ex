@@ -390,20 +390,7 @@ defmodule EctoTrail do
       changeset: changes,
       change_type: operation_type
     }
-    |> changelog_changeset()
-    |> repo.insert()
-    |> case do
-      {:ok, changelog} ->
-        {:ok, changelog}
-
-      {:error, reason} ->
-        Logger.error(
-          "Failed to store changes in audit log: #{inspect(operation)} " <>
-            "by actor #{inspect(actor_id)}. Reason: #{inspect(reason)}"
-        )
-
-        {:ok, reason}
-    end
+    |> insert_changelog_safely(repo, operation, actor_id)
   end
 
   defp log_changes(repo, %{operation: operation} = _multi_acc, struct_or_changeset, actor_id, operation_type) do
@@ -431,20 +418,7 @@ defmodule EctoTrail do
       changeset: changes,
       change_type: operation_type
     }
-    |> changelog_changeset()
-    |> repo.insert()
-    |> case do
-      {:ok, changelog} ->
-        {:ok, changelog}
-
-      {:error, reason} ->
-        Logger.error(
-          "Failed to store changes in audit log: #{inspect(struct_or_changeset)} " <>
-            "by actor #{inspect(actor_id)}. Reason: #{inspect(reason)}"
-        )
-
-        {:ok, reason}
-    end
+    |> insert_changelog_safely(repo, struct_or_changeset, actor_id)
   end
 
   defp prepare_struct_or_changeset(%Changeset{data: data} = _changeset, :delete), do: data
@@ -573,5 +547,48 @@ defmodule EctoTrail do
 
   defp changelog_changeset(attrs) do
     Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+  end
+
+  defp insert_changelog_safely(changelog_changeset, repo, operation_for_logging, actor_id) do
+    try do
+      case repo.insert(changelog_changeset) do
+        {:ok, changelog} ->
+          {:ok, changelog}
+
+        {:error, %Ecto.Changeset{errors: errors} = reason} ->
+          if Keyword.has_key?(errors, :id) or
+               Enum.any?(errors, fn {_, {msg, _}} -> is_binary(msg) and String.contains?(msg, "unique") end) do
+            Logger.error(
+              "Failed to store changes in audit log (constraint): #{inspect(operation_for_logging)} " <>
+                "by actor #{inspect(actor_id)}. Reason: #{inspect(reason)}"
+            )
+
+            {:ok, reason}
+          else
+            Logger.error(
+              "Failed to store changes in audit log: #{inspect(operation_for_logging)} " <>
+                "by actor #{inspect(actor_id)}. Reason: #{inspect(reason)}"
+            )
+
+            {:ok, reason}
+          end
+
+        {:error, reason} ->
+          Logger.error(
+            "Failed to store changes in audit log: #{inspect(operation_for_logging)} " <>
+              "by actor #{inspect(actor_id)}. Reason: #{inspect(reason)}"
+          )
+
+          {:ok, reason}
+      end
+    rescue
+      error in [Ecto.ConstraintError] ->
+        Logger.error(
+          "Failed to store changes in audit log (constraint): #{inspect(operation_for_logging)} " <>
+            "by actor #{inspect(actor_id)}. Reason: #{inspect(error)}"
+        )
+
+        {:ok, error}
+    end
   end
 end
