@@ -391,10 +391,10 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog(repo)
     |> case do
-      {:ok, changelog} ->
-        {:ok, changelog}
+      {:ok, _changelog_or_skip} ->
+        {:ok, :audit_logged}
 
       {:error, reason} ->
         Logger.error(
@@ -432,10 +432,10 @@ defmodule EctoTrail do
       change_type: operation_type
     }
     |> changelog_changeset()
-    |> repo.insert()
+    |> insert_changelog(repo)
     |> case do
-      {:ok, changelog} ->
-        {:ok, changelog}
+      {:ok, _changelog_or_skip} ->
+        {:ok, :audit_logged}
 
       {:error, reason} ->
         Logger.error(
@@ -572,6 +572,30 @@ defmodule EctoTrail do
   defp map_custom_ecto_type(value), do: value
 
   defp changelog_changeset(attrs) do
-    Changeset.cast(%Changelog{}, attrs, @changelog_fields)
+    %Changelog{}
+    |> Changeset.cast(attrs, @changelog_fields)
+    |> Changeset.unique_constraint(:id, name: "audit_log_pkey")
+    |> Changeset.unique_constraint(:id, name: "audit_logs_pkey")
+  end
+
+  # Wrap audit log inserts so that a pkey (or other unique) constraint violation on the
+  # audit table never raises a hard Ecto.ConstraintError to the caller of *_and_log.
+  # We treat it as a soft, idempotent "already recorded" situation (per OPS-4582).
+  defp insert_changelog(changeset, repo) do
+    repo.insert(changeset)
+  rescue
+    e in Ecto.ConstraintError ->
+      constraint = e.constraint
+
+      if is_binary(constraint) and audit_pkey_constraint?(constraint) do
+        Logger.error("Audit log insert hit unique constraint (idempotent skip): #{constraint}")
+        {:ok, :audit_log_idempotent_skip}
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  defp audit_pkey_constraint?(name) do
+    String.ends_with?(name, "_pkey") and (name =~ "audit" or name =~ "log" or name =~ "changelog")
   end
 end
