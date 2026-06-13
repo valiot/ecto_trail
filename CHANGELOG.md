@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-06-13
+
+### Fixed
+
+- `*_and_log/*` and `log/*` no longer raise `Ecto.ConstraintError` on `audit_log_pkey` (or custom table pkey) during concurrent/racy inserts in `log_changes/5`. `changelog_changeset/1` now declares `unique_constraint(:id, name: "#{table}_pkey")`. Closes OPS-4575.
+
 ## [1.0.3] - 2026-05-28
 
 ### Fixed

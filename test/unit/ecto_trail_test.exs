@@ -329,4 +329,48 @@ defmodule EctoTrailTest do
                )
     end
   end
+
+  describe "audit log primary key constraint handling (OPS-4575)" do
+    setup do
+      {:ok, schema} = TestRepo.insert(%Resource{name: "for-update"})
+      {:ok, %{schema: schema}}
+    end
+
+    test "update_and_log succeeds even if audit_log insert hits pkey unique violation", %{schema: schema} do
+      table = Changelog.__schema__(:source) |> to_string()
+      seq_name = "#{table}_id_seq"
+
+      # Seed a conflicting audit row with a high id unlikely to be used by other tests
+      conflict_id = 2_000_000_007
+
+      %Changelog{}
+      |> Changeset.cast(
+        %{
+          id: conflict_id,
+          actor_id: "seed",
+          resource: "resources",
+          resource_id: "0",
+          changeset: %{},
+          change_type: :insert
+        },
+        [:id, :actor_id, :resource, :resource_id, :changeset, :change_type]
+      )
+      |> TestRepo.insert!()
+
+      # Force the sequence to emit the same id on nextval (simulates race on pkey)
+      Ecto.Adapters.SQL.query!(TestRepo, "SELECT setval($1::regclass, $2, false)", [
+        seq_name,
+        conflict_id - 1
+      ])
+
+      # Before the fix this raises Ecto.ConstraintError (missing unique_constraint on pkey in changelog_changeset).
+      # After the fix, unique_constraint turns the violation into a recoverable changeset error; *_and_log swallows it.
+      result =
+        schema
+        |> Changeset.change(%{name: "name-after-race"})
+        |> TestRepo.update_and_log("race-actor")
+
+      assert {:ok, %Resource{name: "name-after-race"}} = result
+    end
+  end
 end
